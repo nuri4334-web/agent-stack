@@ -3,7 +3,7 @@ import { API_URL, soruSor } from './api';
 
 // Geçici kullanıcı ve rol sabitleri (Aşama 2'de oturumdan gelecek)
 // Rolü 'admin' yaparsanız Güvenlik Paneli sekmesi görünür
-const AKTIF_KULLANICI = { ad: 'ayse', rol: 'admin' }; // 'kullanici' | 'admin'
+const AKTIF_KULLANICI = { ad: 'ali', rol: 'kullanici' }; // 'kullanici' | 'admin'
 
 export default function App() {
   // 3 sayfa arasında geçiş: 'giris' | 'sohbet' | 'panel'
@@ -184,8 +184,8 @@ export default function App() {
                       <div>Kaynak yok</div>
                     ) : (
                       <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
-                        {cevapVerisi.kaynaklar.map((k, idx) => (
-                          <li key={idx}>
+                        {cevapVerisi.kaynaklar.map((k) => (
+                          <li key={`${k.kanal}-${k.zaman}`}>
                             #{k.kanal} — {k.yazan}: &quot;{k.metin}&quot;
                           </li>
                         ))}
