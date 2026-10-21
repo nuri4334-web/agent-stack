@@ -1,20 +1,23 @@
 import { useState } from 'react';
+import { API_URL, soruSor } from './api';
 
-// Sunucu adresi ayardan okunur (Arayüzde hiçbir gizli anahtar yoktur)
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Geçici kullanıcı ve rol sabitleri (Aşama 2'de oturumdan gelecek)
+// Rolü 'admin' yaparsanız Güvenlik Paneli sekmesi görünür
+const AKTIF_KULLANICI = { ad: 'ayse', rol: 'admin' }; // 'kullanici' | 'admin'
 
 export default function App() {
   // 3 sayfa arasında geçiş: 'giris' | 'sohbet' | 'panel'
   const [aktifSayfa, setAktifSayfa] = useState('sohbet');
   const [profilAcik, setProfilAcik] = useState(false);
 
-  // Sohbet sahte akış durumları (S1-07 Adım 3)
+  // Sohbet akışı durumları
   const [soru, setSoru] = useState('');
   const [gonderilenSoru, setGonderilenSoru] = useState('');
   const [yaziyor, setYaziyor] = useState(false);
   const [cevapVerisi, setCevapVerisi] = useState(null);
+  const [hataMesaji, setHataMesaji] = useState('');
 
-  const soruGonder = (e) => {
+  const soruGonder = async (e) => {
     e.preventDefault();
     if (!soru.trim() || yaziyor) return;
 
@@ -23,25 +26,20 @@ export default function App() {
     setSoru('');
     setYaziyor(true);
     setCevapVerisi(null);
+    setHataMesaji('');
 
-    // Sahte akış: Soru yaz -> "Yazıyor..." -> Cevap (Sohbet anlaşması formatında)
-    setTimeout(() => {
+    try {
+      const sonuc = await soruSor(mevcutSoru, AKTIF_KULLANICI.ad);
+      if (sonuc.hata) {
+        setHataMesaji(sonuc.hata.mesaj || 'Bir hata oluştu.');
+      } else {
+        setCevapVerisi(sonuc);
+      }
+    } catch (err) {
+      setHataMesaji(err?.hata?.mesaj || 'Sunucuya ulaşılamadı.');
+    } finally {
       setYaziyor(false);
-      setCevapVerisi({
-        istek_id: 'sahte-istek-001',
-        durum: 'tamam',
-        cevap: `"${mevcutSoru}" sorusu için sahte yanıt: #dev kanalında bu hafta login sayfası ve API bağlantıları konuşuldu.`,
-        kaynaklar: [
-          {
-            kanal: 'dev',
-            yazan: 'Deniz',
-            zaman: '2026-10-22T14:05:00+03:00',
-            metin: '@Ali login sayfasını sen al',
-          },
-        ],
-        guvenlik: { engellenen: 0, maskelenen: 0, supheli: 0 },
-      });
-    }, 1000);
+    }
   };
 
   return (
@@ -65,12 +63,16 @@ export default function App() {
           >
             Sohbet
           </button>
-          <button
-            className={`nav-link ${aktifSayfa === 'panel' ? 'active' : ''}`}
-            onClick={() => setAktifSayfa('panel')}
-          >
-            Güvenlik Paneli
-          </button>
+
+          {/* Güvenlik Paneli yalnızca admin rolüne görünür */}
+          {AKTIF_KULLANICI.rol === 'admin' && (
+            <button
+              className={`nav-link ${aktifSayfa === 'panel' ? 'active' : ''}`}
+              onClick={() => setAktifSayfa('panel')}
+            >
+              Güvenlik Paneli
+            </button>
+          )}
 
           {/* Profil & Bağlı Hesaplar Açılır Menüsü */}
           <div className="profile-wrapper">
@@ -78,10 +80,14 @@ export default function App() {
               className="profile-pill"
               onClick={() => setProfilAcik(!profilAcik)}
             >
-              <div className="avatar">AL</div>
+              <div className="avatar">
+                {AKTIF_KULLANICI.ad.slice(0, 2).toUpperCase()}
+              </div>
               <div style={{ textAlign: 'left', fontSize: '12px' }}>
-                <div style={{ fontWeight: 600 }}>ali</div>
-                <div style={{ color: '#94A3B8', fontSize: '11px' }}>Kullanıcı</div>
+                <div style={{ fontWeight: 600 }}>{AKTIF_KULLANICI.ad}</div>
+                <div style={{ color: '#94A3B8', fontSize: '11px' }}>
+                  {AKTIF_KULLANICI.rol === 'admin' ? 'Admin' : 'Kullanıcı'}
+                </div>
               </div>
               <div className="status-dot" />
             </button>
@@ -100,23 +106,23 @@ export default function App() {
       </header>
 
       <main className="container">
-        {/* 1. SAYFA: GİRİŞ (S1-07'de boş/iskelet) */}
+        {/* 1. SAYFA: GİRİŞ */}
         {aktifSayfa === 'giris' && (
           <div className="card">
             <h2>Giriş Ekranı (İskelet)</h2>
             <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Aşama 2'de aktifleşecek giriş ve Slack ile giriş ekranı iskeleti.
+              Aşama 2&apos;de aktifleşecek giriş ve Slack ile giriş ekranı iskeleti.
             </p>
           </div>
         )}
 
-        {/* 2. SAYFA: SOHBET (Sahte Akış ile Çalışır) */}
+        {/* 2. SAYFA: SOHBET */}
         {aktifSayfa === 'sohbet' && (
           <div>
             <div className="card">
               <h2>Sohbet</h2>
               <p style={{ color: '#94A3B8', fontSize: '13px', marginTop: '4px' }}>
-                Bağlı Sunucu Adresi (Ayırdan Okunan): <code>{API_URL}</code>
+                Bağlı Sunucu Adresi (Ayardan Okunan): <code>{API_URL}</code>
               </p>
 
               {gonderilenSoru && (
@@ -142,7 +148,21 @@ export default function App() {
                 </div>
               )}
 
-              {/* Sahte Cevap, Kaynaklar ve Güvenlik Özeti */}
+              {/* Hata Durumu */}
+              {hataMesaji && !yaziyor && (
+                <div
+                  className="meta-box"
+                  style={{
+                    marginTop: '16px',
+                    color: '#FCA5A5',
+                    borderColor: '#EF4444',
+                  }}
+                >
+                  {hataMesaji}
+                </div>
+              )}
+
+              {/* Cevap, Kaynaklar ve Güvenlik Özeti */}
               {cevapVerisi && !yaziyor && (
                 <div style={{ marginTop: '20px' }}>
                   <div
@@ -166,7 +186,7 @@ export default function App() {
                       <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
                         {cevapVerisi.kaynaklar.map((k, idx) => (
                           <li key={idx}>
-                            #{k.kanal} — {k.yazan}: "{k.metin}"
+                            #{k.kanal} — {k.yazan}: &quot;{k.metin}&quot;
                           </li>
                         ))}
                       </ul>
@@ -198,8 +218,8 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. SAYFA: GÜVENLİK PANELİ (S1-07'de boş/iskelet) */}
-        {aktifSayfa === 'panel' && (
+        {/* 3. SAYFA: GÜVENLİK PANELİ */}
+        {aktifSayfa === 'panel' && AKTIF_KULLANICI.rol === 'admin' && (
           <div className="card">
             <h2>Güvenlik Paneli (İskelet)</h2>
             <p style={{ color: '#94A3B8', marginTop: '8px' }}>
