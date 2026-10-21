@@ -18,3 +18,6 @@ IZINLI_KANALLAR = _liste(os.getenv("IZINLI_KANALLAR", ""))
 
 # Arayüzün çalıştığı adres(ler); tarayıcı yalnızca buradan sunucuya istek atabilir.
 ARAYUZ_ADRESLERI = _liste(os.getenv("ARAYUZ_ADRESLERI", "http://localhost:5173"))
+
+# SQLite veritabanı dosyası. Göreli yol repo köküne göre çözülür (boşsa varsayılan kullanılır).
+VERITABANI_YOLU = KOK / (os.getenv("VERITABANI_YOLU") or "server/agentstack.db")
