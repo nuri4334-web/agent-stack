@@ -39,4 +39,23 @@ cd server
 pytest
 ```
 
+## Slack verisi
+
+`server/` içinde, venv ile:
+
+```powershell
+# Slack'ten çek (.env içinde SLACK_BOT_TOKEN gerekir). Tekrar çalıştırmak mesajları çoğaltmaz.
+.venv/Scripts/python -m app.slack_baglayici.cek
+# Son 7 gün; ya da önce bütün mesajları ve üyelikleri silip baştan çek
+.venv/Scripts/python -m app.slack_baglayici.cek --gun 7
+.venv/Scripts/python -m app.slack_baglayici.cek --sifirdan
+# Çekilen veriyi demo-verisi/slack-baslangic-verisi.json dosyasına yaz
+.venv/Scripts/python -m app.slack_baglayici.seed disa-aktar
+# Bot anahtarı olmadan: seed dosyasını boş veritabanına yükle
+.venv/Scripts/python -m app.slack_baglayici.seed yukle
+```
+
+`--gun` varsayılanı 30; demo mesajları 22 Ekim 2026'da yazıldı, yaklaşık 21 Kasım'dan sonra gerçek çekmede gelmesi için `--gun` büyütülmeli ya da seed kullanılmalı.
+Ayrıntılar: [`docs/veri-yapisi.md`](../docs/veri-yapisi.md) ("Slack çekme ve başlangıç verisi").
+
 Sohbet anlaşması: [`docs/sohbet-anlasmasi.md`](../docs/sohbet-anlasmasi.md)

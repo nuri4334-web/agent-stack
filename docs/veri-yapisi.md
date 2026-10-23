@@ -123,6 +123,20 @@ Bütün sayılar en az 0'dır ve verilmezse 0 olur.
 Çalışmanın sonunda bir özet satırı yazılır (`adim = slack_cekme`, `karar = tamam`, `kanal_sayisi`, `kullanici_sayisi`, `uyelik_sayisi`, `mesaj_sayisi` dolu).
 Çekilemeyen her kanal için ayrı bir satır yazılır (`karar = hata`, ör. `sebep_kodu = KANAL_CEKILEMEDI`, `kanal_id` dolu).
 
+Slack çekmenin sebep kodları:
+
+| Kod | Karar | Anlamı |
+|---|---|---|
+| `KANAL_LISTESI_CEKILEMEDI` | `hata` | Kanal listesi alınamadı; hiçbir şey yazılmadı. |
+| `KULLANICI_LISTESI_CEKILEMEDI` | `hata` | Kullanıcı listesi alınamadı; hiçbir şey yazılmadı. |
+| `VERITABANI_YAZILAMADI` | `hata` | Kullanıcı ve kanal listesi yazılamadı; hiçbir şey yazılmadı. |
+| `BOT_KANALDA_DEGIL` | `hata` | Kanal izinli ama bot kanalda değil; o kanal için Slack'e istek yapılmadı. |
+| `KANAL_CEKILEMEDI` | `hata` | Kanalın üyeleri ya da mesajları alınamadı (ör. Slack `not_in_channel`, çok fazla istek); kanalın eski satırlarına dokunulmadı. |
+| `KANAL_YAZILAMADI` | `hata` | Kanalın verisi veritabanına yazılamadı; o kanalın işlemi geri alındı. |
+| `BAZI_KANALLAR_CEKILEMEDI` | `tamam` | Özet satırı: en az bir kanal hata verdi. Hata yoksa `sebep_kodu` boştur. |
+
+Slack'in kendi hata kodu (ör. `not_in_channel`) olay kaydına yazılmaz; yalnızca ekranda görünür.
+
 ## 8. `yapay_zeka_cagrilari`
 
 Yapay zekâya yapılan her çağrının ölçüleri. İstem ve cevap metni tutulmaz.
@@ -139,8 +153,43 @@ Yapay zekâya yapılan her çağrının ölçüleri. İstem ve cevap metni tutul
 | `girdi_token` | Gönderilen token sayısı; bilinmiyorsa (ör. hata durumunda) boş (NULL). |
 | `cikti_token` | Gelen token sayısı; bilinmiyorsa (ör. hata durumunda) boş (NULL). |
 
+## Slack çekme ve başlangıç verisi (S1-04)
+
+Kod: `server/app/slack_baglayici/`. Komutlar `server/` içinde çalışır:
+
+```powershell
+.venv/Scripts/python -m app.slack_baglayici.cek [--gun 30] [--sifirdan]
+.venv/Scripts/python -m app.slack_baglayici.seed disa-aktar [--dosya YOL] [--uzerine-yaz]
+.venv/Scripts/python -m app.slack_baglayici.seed yukle [--dosya YOL]
+```
+
+Çekme kuralları:
+
+- Token yalnızca `.env` içindeki `SLACK_BOT_TOKEN`'dan okunur; ekrana, olay kaydına, hata mesajına ve seed dosyasına yazılmaz.
+- Kanalların durumu her çalıştırmada Slack'teki güncel ad ve `IZINLI_KANALLAR` ile yeniden hesaplanır. Bir kanal için üye ya da mesaj isteği yapılmadan hemen önce durum bir kez daha hesaplanır; `hariç` kanal için Slack'e hiç istek yapılmaz.
+- Slack kanal listesinde artık görünmeyen kanal (arşivlendi, silindi, bot private kanaldan çıkarıldı) `hariç` olur.
+- Durumu `hariç` olan her kanalın mesajları ve üyelikleri silinir; kanal satırı kalır (olay kaydı ona bağlı olabilir).
+- Bot izinli bir kanalda değilse o kanal için istek yapılmaz, `BOT_KANALDA_DEGIL` kaydı yazılır.
+- Her izinli kanalın üye listesi tek işlemde yenilenir: Slack'te artık olmayan üyelik satırı silinir, kalanların `guncelleme_zamani` yenilenir.
+- Yalnızca kişilerin düz mesajları yazılır: alt türü (`subtype`) olan her mesaj (kanala katıldı, bot mesajı, kanal adı değişti, thread'den kanala gönderilen yanıt vb.), yazanı olmayan ya da metni boş olan mesaj atlanır. Ekranda kanal başına atlanan sayısı ve nedenlerin dağılımı görünür (ör. `3 atlandı: channel_join 3`); bu dağılım olay kaydına yazılmaz.
+- Mesaj veritabanına yazılmadan hemen önce `temizlik.temizle()` çağrılır (şimdilik metni değiştirmez; Aşama 3'te filtre bağlanacak).
+- Aynı mesaj (`kanal_id` + `ts`) ikinci kez yazılmaz; komutu tekrar çalıştırmak mesajları çoğaltmaz.
+- Slack "çok fazla istek" (HTTP 429) derse `Retry-After` kadar beklenir (tek bekleme en fazla 120 saniye) ve en fazla 5 kez denenir.
+- `--gun` varsayılanı 30 (en az 1, en fazla 365). Demo mesajları 22 Ekim 2026'da yazıldı; yaklaşık 21 Kasım'dan sonra gerçek çekmede gelmesi için `--gun` büyütülmeli ya da seed kullanılmalı.
+- `--sifirdan`: çekmeden önce bütün `mesajlar` ve `kanal_uyelikleri` satırları silinir; olay kaydı ve diğer tablolar kalır. Veritabanı dosyası silinirse komut boş dosyada da çalışır.
+
+Başlangıç verisi (seed), varsayılan dosya `demo-verisi/slack-baslangic-verisi.json`:
+
+- JSON, UTF-8, LF. Alanlar: `bicim` (`agentstack-slack-seed`), `surum` (1), `kanallar` (`slack_id`, `ad`, `ozel_mi`), `slack_kullanicilari` (`slack_id`, `gorunen_ad`, `gercek_ad`, `bot_mu`), `kanal_uyelikleri` (`kanal_id`, `slack_kullanici_id`), `mesajlar` (`kanal_id`, `ts`, `yazan_id`, `zaman`, `temiz_metin`).
+- Yalnızca izinli kanallar, onların üyelikleri ve mesajları, bu satırların andığı kullanıcılar girer. Olay kaydı, yapay zekâ çağrıları, kişiler, bağlı hesaplar, `durum`, `guncelleme_zamani` ve `supheli` girmez.
+- Gizli bilgi kontrolü (yazarken ve okurken): çekmede kullanılan token dosyada geçemez; `xox?-`, `ghp_`, `AIza`, `AKIA` kalıplarına uyan her metin `EXAMPLE` içermelidir. Kontrolden geçmeyen dosya yazılmaz ya da yüklenmez; hata mesajında yalnızca kalıbın adı görünür.
+- `yukle` yalnızca Slack tabloları boş bir veritabanına yükler. Kanal durumu yükleyenin `IZINLI_KANALLAR` listesiyle yeniden hesaplanır; `hariç` çıkan kanalın üyelik ve mesajları yüklenmez.
+
 ## Bilinen sınırlamalar
 
+- Slack'te düzenlenen mesaj veritabanında güncellenmez; silinen mesaj veritabanında kalır (`--sifirdan` ile düzelir).
+- Bir kanalın üye listesi çekilemezse o kanalın eski üyelikleri kalır; ne kadar eski oldukları `guncelleme_zamani`'ndan görülür.
+- `temizle()` şimdilik metni değiştirmez: Aşama 3'e kadar `temiz_metin` aslında Slack'teki metindir.
 - Yabancı anahtar kontrolü yalnızca `baglan()` ile açılan bağlantıda çalışır; veritabanını başka yoldan (`sqlite3.connect`) açan kod bu kontrolü kaybeder.
 - `olay_kayitlari.adim` değer listesi `kapi.ADIMLAR` ile elle eşleşir; kapıya adım eklenirse şema da güncellenmelidir (bir test farkı yakalar).
 - Thread yanıtları, ekler ve dosyalar kapsam dışıdır.
