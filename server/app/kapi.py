@@ -65,15 +65,11 @@ def yapay_zekaya_sor(b: IstekBaglami) -> None:
     veri_blogu = "\n".join(mesaj_satirlari) if mesaj_satirlari else "(Mesaj yok)"
     veri_metni = f"Kullanıcı Sorusu: {b.soru}\n\nİlgili Mesajlar:\n{veri_blogu}"
 
-    try:
-        sonuc = yapay_zeka.sor(talimat=VARSAYILAN_SISTEM_TALIMATI, veri=veri_metni)
-        b.model_cevabi = sonuc.cevap
-        b.kullanilan_model = sonuc.model
-        b.girdi_token = sonuc.girdi_token
-        b.cikti_token = sonuc.cikti_token
-    except yapay_zeka.YapayZekaHatasi as hata:
-        b.model_cevabi = f"Yapay zekâ yanıt veremedi: {hata.mesaj}"
-        b.kullanilan_model = "hata"
+    sonuc = yapay_zeka.sor(talimat=VARSAYILAN_SISTEM_TALIMATI, veri=veri_metni)
+    b.model_cevabi = sonuc.cevap
+    b.kullanilan_model = sonuc.model
+    b.girdi_token = sonuc.girdi_token
+    b.cikti_token = sonuc.cikti_token
 
 
 # --- 6. Cevap kontrolü (Aşama 3-4): dış link/resim silme, ikinci sır taraması.

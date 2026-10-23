@@ -1,9 +1,13 @@
 """S1-08: Yapay zekâ bağlantısı v1 testleri."""
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from app import ayarlar, kapi, yapay_zeka
+from app.main import app
 from app.yapay_zeka import gemini
+
+istemci = TestClient(app)
 
 
 def test_sahte_saglayici_sabit_cevap_ve_sayac(monkeypatch):
@@ -47,7 +51,7 @@ def test_durdurulan_istek_sahte_sayacini_artirmaz(monkeypatch):
 def test_gemini_talimat_ve_veriyi_ayri_alanlara_koyar_ve_arac_vermez(monkeypatch):
     monkeypatch.setattr(ayarlar, "AI_SAGLAYICI", "gemini")
     monkeypatch.setattr(ayarlar, "GEMINI_API_KEY", "test-gizli-anahtar-123")
-    monkeypatch.setattr(ayarlar, "GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(ayarlar, "GEMINI_MODEL", "gemini-3.5-flash-lite")
 
     yakalanan_istek = {}
 
@@ -85,7 +89,7 @@ def test_gemini_talimat_ve_veriyi_ayri_alanlara_koyar_ve_arac_vermez(monkeypatch
 
     sonuc = yapay_zeka.sor(talimat="Sistem kuralı", veri="Slack mesajları")
     assert sonuc.cevap == "Gemini test özeti."
-    assert sonuc.model == "gemini-2.5-flash"
+    assert sonuc.model == "gemini-3.5-flash-lite"
     assert sonuc.girdi_token == 15
     assert sonuc.cikti_token == 4
 
@@ -123,8 +127,23 @@ def test_gemini_hata_ve_zaman_asiminda_anahtar_sizdirmaz(monkeypatch):
     assert gizli not in exc_info.value.mesaj
     assert gizli not in str(exc_info.value)
 
-    # Kapı üzerinden çağrıldığında sunucu çökmez, anlaşılır mesaj döner
-    cevap = kapi.soru_isle("test sorusu", "ali")
-    assert cevap.durum == "tamam"
-    assert "zaman aşımı" in cevap.cevap.lower()
-    assert gizli not in cevap.cevap
+    # Sohbet anlaşması: Zaman aşımında sunucu 504 ve ZAMAN_ASIMI dönmeli
+    r_504 = istemci.post("/api/soru", json={"soru": "test sorusu", "kullanici": "ali"})
+    assert r_504.status_code == 504
+    govde_504 = r_504.json()
+    assert govde_504["hata"]["kod"] == "ZAMAN_ASIMI"
+    assert gizli not in str(govde_504)
+
+    # Diğer sağlayıcı hatalarında sunucu 502 ve SAGLAYICI_HATASI dönmeli
+    class SunucuHatasiClient(ZamanAsimiClient):
+        def post(self, url, json, headers):
+            class HataYaniti:
+                status_code = 503
+            return HataYaniti()
+
+    monkeypatch.setattr(httpx, "Client", SunucuHatasiClient)
+    r_502 = istemci.post("/api/soru", json={"soru": "test sorusu", "kullanici": "ali"})
+    assert r_502.status_code == 502
+    govde_502 = r_502.json()
+    assert govde_502["hata"]["kod"] == "SAGLAYICI_HATASI"
+    assert gizli not in str(govde_502)
