@@ -6,8 +6,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+
+from .yapay_zeka import YapayZekaHatasi
 from . import ayarlar, kapi
 from .sema import HataCevabi, SoruCevabi, SoruIstegi
+
 
 log = logging.getLogger("agentstack")
 
@@ -24,6 +27,13 @@ app.add_middleware(
 def hata(durum_kodu: int, kod: str, mesaj: str) -> JSONResponse:
     govde = HataCevabi(hata={"kod": kod, "mesaj": mesaj})
     return JSONResponse(status_code=durum_kodu, content=govde.model_dump())
+
+
+@app.exception_handler(YapayZekaHatasi)
+async def yapay_zeka_hatasi_yakala(_: Request, exc: YapayZekaHatasi):
+    if exc.kod == "ZAMAN_ASIMI":
+        return hata(504, "ZAMAN_ASIMI", exc.mesaj)
+    return hata(502, "SAGLAYICI_HATASI", exc.mesaj)
 
 
 @app.exception_handler(RequestValidationError)
