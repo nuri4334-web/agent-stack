@@ -28,3 +28,5 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 # Gemini model adı ve zaman aşımı süresi (saniye)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 AI_ZAMAN_ASIMI_SN = float(os.getenv("AI_ZAMAN_ASIMI_SN", "30"))
+# SQLite veritabanı dosyası. Göreli yol repo köküne göre çözülür (boşsa varsayılan kullanılır).
+VERITABANI_YOLU = KOK / (os.getenv("VERITABANI_YOLU") or "server/agentstack.db")
