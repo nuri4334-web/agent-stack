@@ -13,6 +13,9 @@ def _liste(deger: str) -> list[str]:
     return [p.strip() for p in deger.split(",") if p.strip()]
 
 
+# Slack bot token'ı (xoxb-...). Yalnızca çekme komutu kullanır; hiçbir çıktıya yazılmaz.
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
+
 # Asistanın okuyacağı kanallar. Listede olmayan kanal okunmaz (varsayılan: hiçbiri).
 IZINLI_KANALLAR = _liste(os.getenv("IZINLI_KANALLAR", ""))
 
