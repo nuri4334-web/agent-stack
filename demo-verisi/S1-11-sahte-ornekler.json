@@ -1,0 +1,415 @@
+{
+  "aciklama": "S1-11 sahte örnekleri. Hepsi uydurmadır; gerçek anahtar, kişi, hesap ya da kart değildir. Aşama 3'teki giriş filtresinin testlerinde kullanılabilir.",
+  "alanlar": {
+    "guven": "kesin | şüpheli | zayıf | — (masum)",
+    "beklenen": "maskele+alarm | maskele | dokunma"
+  },
+  "detect_secrets_notu": "detect-secrets 1.5.0, varsayılan eklentiler, `scan --no-verify --all-files` ile her örnek ayrı dosyada tarandı.",
+  "ornekler": [
+    {
+      "id": "S1",
+      "kategori": "sir",
+      "tur": "Slack bot token'ı",
+      "ornek": "SLACK_BOT_TOKEN=xoxb-0000000000-0000000000000-EXAMPLEexampleEXAMPLEexa",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Slack Token"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S2",
+      "kategori": "sir",
+      "tur": "Slack kullanıcı token'ı",
+      "ornek": "token: xoxp-0000000000-0000000000-0000000000000-EXAMPLE0000000000000000000000000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Slack Token"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S3",
+      "kategori": "sir",
+      "tur": "Slack uygulama token'ı",
+      "ornek": "socket mode için xapp-1-A0000000000-0000000000000-000000000000000000000000000000000000000000000000000000000example",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "S4",
+      "kategori": "sir",
+      "tur": "GitHub kişisel token'ı (klasik)",
+      "ornek": "GITHUB_TOKEN=ghp_EXAMPLE00000000000000000000000000000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "GitHub Token"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S5",
+      "kategori": "sir",
+      "tur": "GitHub ince ayarlı token'ı",
+      "ornek": "bunu kullan: github_pat_EXAMPLE000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "S6",
+      "kategori": "sir",
+      "tur": "AWS erişim anahtarı kimliği",
+      "ornek": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "AWS Access Key"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S7",
+      "kategori": "sir",
+      "tur": "AWS gizli erişim anahtarı",
+      "ornek": "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "guven": "şüpheli",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [
+        "AWS Access Key",
+        "Base64 High Entropy String",
+        "Secret Keyword"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S8",
+      "kategori": "sir",
+      "tur": "Google API anahtarı (Gemini dahil)",
+      "ornek": "GEMINI_API_KEY=AIzaSyEXAMPLE00000000000000000000000000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Secret Keyword"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S9",
+      "kategori": "sir",
+      "tur": "OpenAI API anahtarı",
+      "ornek": "OPENAI_API_KEY=sk-proj-EXAMPLE0000000000000000000000000000000000000000000000000000000000000000000T3BlbkFJ0000000000000000000000000000000000000000000000000000000000000000000EXAMPLE",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "OpenAI Token"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S10",
+      "kategori": "sir",
+      "tur": "Anthropic API anahtarı",
+      "ornek": "ANTHROPIC_API_KEY=sk-ant-api03-EXAMPLE00000000000000000000000000000000000000000000000000000000000000000000000000000000000000AA",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Secret Keyword"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S11",
+      "kategori": "sir",
+      "tur": "Özel anahtar bloğu",
+      "ornek": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAEXAMPLEexampleEXAMPLEexampleEXAMPLEexample0000\nSAHTEsahteSAHTEsahteSAHTEsahteSAHTEsahteSAHTEsahteSAHTEsahte00000000==\n-----END OPENSSH PRIVATE KEY-----",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Private Key"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S12",
+      "kategori": "sir",
+      "tur": ".env satırı (adında SECRET/TOKEN/KEY/PASSWORD)",
+      "ornek": "JWT_SECRET=ornek-jwt-gizli-anahtar-degistir",
+      "guven": "şüpheli",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [
+        "Secret Keyword"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S12b",
+      "kategori": "sir",
+      "tur": ".env satırı (PASSWORD)",
+      "ornek": "DB_PASSWORD=Ornek-Sifre-2026",
+      "guven": "şüpheli",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [
+        "Secret Keyword"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S13",
+      "kategori": "sir",
+      "tur": "Veritabanı adresindeki şifre",
+      "ornek": "DATABASE_URL=postgres://app_user:Ornek-Sifre-2026@db.staging.example:5432/shop",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "Basic Auth Credentials"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S14",
+      "kategori": "sir",
+      "tur": "Giriş token'ı (JWT)",
+      "ornek": "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvcm5layIsIm5hbWUiOiJTYWh0ZSBLdWxsYW5pY2kifQ.EXAMPLEexampleEXAMPLEexampleEXAMPLE00000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [
+        "JSON Web Token"
+      ],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "S8b",
+      "kategori": "sir",
+      "tur": "Google API anahtarı (adsız, mesaja çıplak yapıştırılmış)",
+      "ornek": "anahtar bu: AIzaSyEXAMPLE00000000000000000000000000",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "S10b",
+      "kategori": "sir",
+      "tur": "Anthropic API anahtarı (adsız, mesaja çıplak yapıştırılmış)",
+      "ornek": "anahtar bu: sk-ant-api03-EXAMPLE00000000000000000000000000000000000000000000000000000000000000000000000000000000000000AA",
+      "guven": "kesin",
+      "beklenen": "maskele+alarm",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "S15",
+      "kategori": "sir",
+      "tur": "Etiketsiz rastgele dizi",
+      "ornek": "şunu dene: Xy9Zk2Lm8Np4Qr7SaB3cD5eF6gH",
+      "guven": "zayıf",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [
+        "Base64 High Entropy String"
+      ],
+      "detect_secrets_sonuc": "yanlış alarm"
+    },
+    {
+      "id": "K1",
+      "kategori": "kisisel",
+      "tur": "E-posta",
+      "ornek": "bana ornek.kisi@example.com adresinden yazabilirsin",
+      "guven": "kesin",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K2",
+      "kategori": "kisisel",
+      "tur": "+90 telefon",
+      "ornek": "acil durumda: +90 500 000 00 00",
+      "guven": "kesin",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K2b",
+      "kategori": "kisisel",
+      "tur": "Telefon (0 ile)",
+      "ornek": "numaram 0500 000 00 00",
+      "guven": "şüpheli",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K3",
+      "kategori": "kisisel",
+      "tur": "TC kimlik numarası",
+      "ornek": "TC: 10000000146",
+      "guven": "kesin",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K3b",
+      "kategori": "kisisel",
+      "tur": "TC kimlik (etiketsiz, kuralı sağlıyor)",
+      "ornek": "formdaki numara 10000000146 idi",
+      "guven": "şüpheli",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K4",
+      "kategori": "kisisel",
+      "tur": "TR IBAN",
+      "ornek": "masraf için IBAN: TR20 0000 0000 0000 0000 0000 01",
+      "guven": "kesin",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "K5",
+      "kategori": "kisisel",
+      "tur": "Kredi kartı numarası",
+      "ornek": "kart: 4111 1111 1111 1111",
+      "guven": "kesin",
+      "beklenen": "maskele",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "kaçırdı"
+    },
+    {
+      "id": "M1",
+      "kategori": "masum",
+      "tur": "Git commit kimliği (40 hex)",
+      "ornek": "Hotfix main'e girdi: commit a663950014a53b5bd5db54211e2fbc919bf98ff3",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M2",
+      "kategori": "masum",
+      "tur": "Kısa commit kimliği",
+      "ornek": "a663950'da düzelttim",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M3",
+      "kategori": "masum",
+      "tur": "UUID",
+      "ornek": "test kullanıcısının ID'si: 3f2b8c1e-7a4d-4e9b-b1c2-9d8e7f6a5b4c",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M4",
+      "kategori": "masum",
+      "tur": "SHA-256 dosya özeti",
+      "ornek": "release-1.4.2.zip SHA-256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [
+        "Hex High Entropy String"
+      ],
+      "detect_secrets_sonuc": "yanlış alarm"
+    },
+    {
+      "id": "M5",
+      "kategori": "masum",
+      "tur": "MD5 dosya özeti",
+      "ornek": "md5: d41d8cd98f00b204e9800998ecf8427e",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [
+        "Hex High Entropy String"
+      ],
+      "detect_secrets_sonuc": "yanlış alarm"
+    },
+    {
+      "id": "M6",
+      "kategori": "masum",
+      "tur": "Rastgele parametreli link",
+      "ornek": "tasarım: https://tasarim.example/file/AbCdEf123456GhIjKl/Login-v3?node-id=12-345&t=Xy9Zk2Lm8Np4Qr7S",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M7",
+      "kategori": "masum",
+      "tur": "Slack kişi ve kanal kimliği",
+      "ornek": "U0CA5HH3M1V kişisini C07DEV1234 kanalına ekledim",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M8",
+      "kategori": "masum",
+      "tur": "Slack mesaj zaman damgası",
+      "ornek": "şu mesaj: 1792059120.000100",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M9",
+      "kategori": "masum",
+      "tur": "11 haneli sipariş numarası",
+      "ornek": "sipariş no 20261020001 kargoya verildi",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M10",
+      "kategori": "masum",
+      "tur": "AWS hesap numarası / ARN",
+      "ornek": "rol: arn:aws:iam::123456789012:role/S3Access",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M11",
+      "kategori": "masum",
+      "tur": "Sürüm numarası ve tarih",
+      "ornek": "v1.4.2 sürümü 2026-10-20'de çıktı",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    },
+    {
+      "id": "M12",
+      "kategori": "masum",
+      "tur": "Base64 resim parçası",
+      "ornek": "logo: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk",
+      "guven": "—",
+      "beklenen": "dokunma",
+      "detect_secrets_1_5_0": [],
+      "detect_secrets_sonuc": "doğru"
+    }
+  ],
+  "kimlikler": "Kimlikler S1-11-sir-katalogu.md'deki tür numaralarıyla aynıdır; b ile bitenler aynı türün ikinci örneğidir."
+}
