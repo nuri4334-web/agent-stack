@@ -32,3 +32,24 @@ def olay_yaz(
     sutunlar = ", ".join(satir)
     yerler = ", ".join("?" * len(satir))
     baglanti.execute(f"INSERT INTO olay_kayitlari ({sutunlar}) VALUES ({yerler})", tuple(satir.values()))
+
+
+def yapay_zeka_cagrisi_yaz(
+    baglanti: sqlite3.Connection,
+    *,
+    zaman: str,
+    istek_id: str,
+    model: str,
+    sonuc: str,
+    gonderilen_mesaj_sayisi: int,
+    sure_ms: float,
+    girdi_token: int | None = None,
+    cikti_token: int | None = None,
+) -> None:
+    """yapay_zeka_cagrilari tablosuna tek satır (S1-05). Metin almaz. Commit etmez: çağıranın işlemi içinde kullanılır."""
+    baglanti.execute(
+        "INSERT INTO yapay_zeka_cagrilari "
+        "(zaman, istek_id, model, sonuc, gonderilen_mesaj_sayisi, sure_ms, girdi_token, cikti_token) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (zaman, istek_id, model, sonuc, gonderilen_mesaj_sayisi, sure_ms, girdi_token, cikti_token),
+    )

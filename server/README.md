@@ -58,4 +58,17 @@ pytest
 `--gun` varsayılanı 30; demo mesajları 22 Ekim 2026'da yazıldı, yaklaşık 21 Kasım'dan sonra gerçek çekmede gelmesi için `--gun` büyütülmeli ya da seed kullanılmalı.
 Ayrıntılar: [`docs/veri-yapisi.md`](../docs/veri-yapisi.md) ("Slack çekme ve başlangıç verisi").
 
+## Uçtan uca deneme
+
+`server/` içinde, venv ile (`.env`'de `IZINLI_KANALLAR=genel,dev,yonetim`, `AI_SAGLAYICI=sahte`):
+
+```powershell
+# Veritabanı yoksa ya da boşsa
+.venv/Scripts/python -m app.slack_baglayici.seed yukle
+.venv/Scripts/python -m uvicorn app.main:app --reload
+```
+
+http://localhost:8000/docs → `POST /api/soru` → Try it out → `{"soru": "#dev'i özetle", "kullanici": "ali"}`.
+Veri seçimi kuralları: [`docs/veri-yapisi.md`](../docs/veri-yapisi.md) ("Veri seçimi (S1-05)").
+
 Sohbet anlaşması: [`docs/sohbet-anlasmasi.md`](../docs/sohbet-anlasmasi.md)

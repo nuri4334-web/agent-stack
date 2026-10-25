@@ -3,7 +3,7 @@
 Sunucunun SQLite tabloları. Sprint 1 · S1-03. Şemanın kendisi: `server/app/veritabani/tablolar.py`.
 
 - Veritabanı Python'un kendi `sqlite3` modülüyle açılır; ek paket, ORM ya da migration aracı yoktur.
-- Dosyanın yeri `.env` içindeki `VERITABANI_YOLU` ayarıdır (göreli yol repo köküne göre). Testler bellek içi (`:memory:`) veritabanı kullanır.
+- Dosyanın yeri `.env` içindeki `VERITABANI_YOLU` ayarıdır (göreli yol repo köküne göre). Testler bellek içi (`:memory:`) ya da geçici klasörde seed yüklü bir veritabanı kullanır; gerçek dosyaya dokunmaz.
 - Şema sürümü `PRAGMA user_version` içinde tutulur; şu anki sürüm **1**. Veritabanının sürümü koddakinden büyükse tablolar oluşturulmaz, hata verilir.
 - Bütün tablolar `STRICT`'tir (yanlış türde değer reddedilir; en az SQLite 3.37.0 gerekir).
 - Zaman alanları ISO 8601 metindir (ör. `2026-10-22T14:05:00+03:00`). Veritabanı zamanı kendisi doldurmaz; zamanı her zaman yazan kod verir.
@@ -153,6 +153,8 @@ Yapay zekâya yapılan her çağrının ölçüleri. İstem ve cevap metni tutul
 | `girdi_token` | Gönderilen token sayısı; bilinmiyorsa (ör. hata durumunda) boş (NULL). |
 | `cikti_token` | Gelen token sayısı; bilinmiyorsa (ör. hata durumunda) boş (NULL). |
 
+**Ne zaman yazılır (S1-05):** Kapı yapay zekâyı her çağırdığında bir satır yazılır (`kapi.yapay_zekaya_sor`). Sağlayıcı hata verirse önce satır yazılır (`ZAMAN_ASIMI` → `zaman_asimi`, diğer bütün kodlar → `saglayici_hatasi`, token'lar boş, model adı `GEMINI_MODEL` ayarı ya da `bilinmiyor`), sonra hata aynen sohbet anlaşmasındaki 502/504'e döner. Yapay zekâ çağrılmayan istekte (erişim yok, mesaj yok) satır yazılmaz. Satır yazılamazsa asıl cevap ya da hata değişmez; sunucu loguna yalnızca istek kimliği ve hata türü yazılır.
+
 ## Slack çekme ve başlangıç verisi (S1-04)
 
 Kod: `server/app/slack_baglayici/`. Komutlar `server/` içinde çalışır:
@@ -184,6 +186,21 @@ Başlangıç verisi (seed), varsayılan dosya `demo-verisi/slack-baslangic-veris
 - Yalnızca izinli kanallar, onların üyelikleri ve mesajları, bu satırların andığı kullanıcılar girer. Olay kaydı, yapay zekâ çağrıları, kişiler, bağlı hesaplar, `durum`, `guncelleme_zamani` ve `supheli` girmez.
 - Gizli bilgi kontrolü (yazarken ve okurken): çekmede kullanılan token dosyada geçemez; `xox?-`, `ghp_`, `AIza`, `AKIA` kalıplarına uyan her metin `EXAMPLE` içermelidir. Kontrolden geçmeyen dosya yazılmaz ya da yüklenmez; hata mesajında yalnızca kalıbın adı görünür.
 - `yukle` yalnızca Slack tabloları boş bir veritabanına yükler. Kanal durumu yükleyenin `IZINLI_KANALLAR` listesiyle yeniden hesaplanır; `hariç` çıkan kanalın üyelik ve mesajları yüklenmez.
+
+## Veri seçimi (S1-05)
+
+Kod: `server/app/veri_secimi/`. Kapının 3. adımı (`kapi.veri_secimi`) yapay zekâya gidecek mesajları şöyle seçer:
+
+- Kanal adı yalnızca `#ad` biçiminde tanınır; ad harf, rakam, `_` ve `-` ile sürer ve kesme işaretinde durur (`#dev'i`, `#yonetim'de` → `dev`, `yonetim`). Büyük/küçük harf fark etmez. Birden fazla ad geçerse hepsi seçilir.
+- `#` olmadan geçen adlar tanınmaz ("genel olarak…", "dev bir sorun", "yonetim hakkında"); bu sorular bütün izinli kanallara gider.
+- Yalnızca rakamlardan oluşan `#` ifadeleri ("PR #17", "#1 öncelik") kanal adı sayılmaz, yok sayılır.
+- Soruda geçen adlardan en az biri veritabanında yoksa ya da durumu `hariç` ise (ör. `#ik`, `#bugs`) istek durur: yapay zekâ çağrılmaz, cevap `erisim_yok` olur. Bu kanal düzeyinde bir kontroldür, kişi bazlı yetki değildir (Aşama 2).
+- Soruda kanal adı yoksa durumu `izinli` olan bütün kanallar okunur.
+- Sorgu ayrıca her zaman `kanallar.durum = 'izinli'` koşulunu uygular; `hariç` kanalın mesajı hiçbir yoldan seçilmez.
+- En fazla 50 mesaj (toplamda, kanal başına değil) seçilir: en yeni 50 mesaj (`ts`'ye göre), yapay zekâya eskiden yeniye gider.
+- Yazan adı: `gercek_ad`, yoksa `gorunen_ad`, yoksa `slack_id`. Metindeki `<@U…>` ve `<#C…>` etiketleri yalnızca yapay zekâya giden veride okunur ada çevrilir (`@Ali Kaya`, `#yonetim`); `temiz_metin` değişmez, diğer `<…>` biçimleri olduğu gibi kalır.
+- Seçilen kanallarda mesaj yoksa yapay zekâ çağrılmaz, cevap "Bu soruya uygun mesaj bulunamadı." olur. `kanallar` tablosu tamamen boşsa sunucu logu önce `seed yukle` ya da `cek` çalıştırılmasını söyler.
+- Sohbet cevabındaki `kaynaklar` Sprint 1'de boş kalır.
 
 ## Bilinen sınırlamalar
 
