@@ -1,26 +1,27 @@
 # server/
 
-Python (FastAPI) sunucu. Bütün mantık burada; arayüzde hiçbir anahtar yoktur.
+Python (FastAPI) server. All logic is here; the frontend has no keys.
 
-## Klasörler (`app/`)
+## Folders (`app/`)
 
-| Klasör / dosya | Ne işe yarar | Sahibi |
+| Folder / file | What it does | Owner |
 |---|---|---|
-| `main.py` | Sunucunun giriş noktası: uçlar (`/saglik`, `/api/soru`) ve hata biçimi. | Nuri |
-| `kapi.py` | Güvenlik kapısı (ana akış). Her soru sırayla yedi adımdan geçer. | Nuri |
-| `sema.py` | Sohbet anlaşmasının kod hali: istek ve cevap biçimleri. | Nuri |
-| `ayarlar.py` | `.env` dosyasından ayarları okur. | Nuri |
-| `slack_baglayici/` | Slack'ten kanal, kullanıcı, üyelik ve mesaj çekme. | Nuri |
-| `yapay_zeka/` | Yapay zekâ bağlantısı: Gemini ve sahte sağlayıcı. | Boran |
-| `filtreler/` | Sır ve isim maskeleme, gizli talimat tespiti. | Musa |
-| `olay_kaydi/` | Her adımın kararı ve süresi; mesaj metni içermez. | Nuri |
-| `veritabani/` | SQLite tabloları. | Nuri |
+| `main.py` | Server entry point: endpoints (`/health`, `/api/ask`) and error format. | Nuri |
+| `gateway.py` | Security gateway (main flow). Every question passes through seven steps in order. | Nuri |
+| `schemas.py` | The API contract in code: request and response formats. | Nuri |
+| `settings.py` | Reads settings from the `.env` file. | Nuri |
+| `slack_connector/` | Fetching channels, users, memberships and messages from Slack. | Nuri |
+| `ai/` | AI connection: Gemini and fake provider. | Boran |
+| `filters/` | Secret and name masking, hidden instruction detection. | Musa |
+| `audit/` | The decision and duration of every step; contains no message text. | Nuri |
+| `database/` | SQLite tables. | Nuri |
+| `data_selection/` | Selects the messages that go to the AI for a question. | Nuri |
 
-## Tek yol kuralı
+## Single path rule
 
-Yapay zekâ bağlantısını (`yapay_zeka/`) **yalnızca `kapi.py` çağırır**. Ne arayüz ne başka bir modül yapay zekâya doğrudan ulaşır. Kestirme yok.
+**Only `gateway.py` calls** the AI connection (`ai/`). Neither the frontend nor another module reaches the AI directly. No shortcut.
 
-## Çalıştırma (Windows, PowerShell)
+## Run (Windows, PowerShell)
 
 ```powershell
 cd server
@@ -29,9 +30,9 @@ python -m venv .venv
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
-Tarayıcıda: http://localhost:8000/saglik ve http://localhost:8000/docs
+In the browser: http://localhost:8000/health and http://localhost:8000/docs
 
-## Testler
+## Tests
 
 ```powershell
 cd server
@@ -39,36 +40,37 @@ cd server
 pytest
 ```
 
-## Slack verisi
+## Slack data
 
-`server/` içinde, venv ile:
+Inside `server/`, with the venv:
 
 ```powershell
-# Slack'ten çek (.env içinde SLACK_BOT_TOKEN gerekir). Tekrar çalıştırmak mesajları çoğaltmaz.
-.venv/Scripts/python -m app.slack_baglayici.cek
-# Son 7 gün; ya da önce bütün mesajları ve üyelikleri silip baştan çek
-.venv/Scripts/python -m app.slack_baglayici.cek --gun 7
-.venv/Scripts/python -m app.slack_baglayici.cek --sifirdan
-# Çekilen veriyi demo-verisi/slack-baslangic-verisi.json dosyasına yaz
-.venv/Scripts/python -m app.slack_baglayici.seed disa-aktar
-# Bot anahtarı olmadan: seed dosyasını boş veritabanına yükle
-.venv/Scripts/python -m app.slack_baglayici.seed yukle
+# Sync from Slack (SLACK_BOT_TOKEN is needed in .env). Running it again does not duplicate messages.
+.venv/Scripts/python -m app.slack_connector.sync
+# Last 7 days; or first delete all messages and memberships and sync from scratch
+.venv/Scripts/python -m app.slack_connector.sync --days 7
+.venv/Scripts/python -m app.slack_connector.sync --from-scratch
+# Write the synced data to the demo-data/slack-seed.json file
+.venv/Scripts/python -m app.slack_connector.seed export
+# Without a bot token: load the seed file into an empty database
+.venv/Scripts/python -m app.slack_connector.seed load
 ```
 
-`--gun` varsayılanı 30; demo mesajları 22 Ekim 2026'da yazıldı, yaklaşık 21 Kasım'dan sonra gerçek çekmede gelmesi için `--gun` büyütülmeli ya da seed kullanılmalı.
-Ayrıntılar: [`docs/veri-yapisi.md`](../docs/veri-yapisi.md) ("Slack çekme ve başlangıç verisi").
+`--days` default is 30; the demo messages were written on 22 October 2026, so to get them in a real sync after about 21 November, increase `--days` or use the seed.
+The schema version is 2. If you have an older local database, delete `server/agentstack.db` and run `seed load` again.
+Details: [`docs/data-model.md`](../docs/data-model.md) ("Slack sync and seed data").
 
-## Uçtan uca deneme
+## End-to-end try
 
-`server/` içinde, venv ile (`.env`'de `IZINLI_KANALLAR=genel,dev,yonetim`, `AI_SAGLAYICI=sahte`):
+Inside `server/`, with the venv (`ALLOWED_CHANNELS=genel,dev,yonetim`, `AI_PROVIDER=fake` in `.env`):
 
 ```powershell
-# Veritabanı yoksa ya da boşsa
-.venv/Scripts/python -m app.slack_baglayici.seed yukle
+# If the database does not exist or is empty
+.venv/Scripts/python -m app.slack_connector.seed load
 .venv/Scripts/python -m uvicorn app.main:app --reload
 ```
 
-http://localhost:8000/docs → `POST /api/soru` → Try it out → `{"soru": "#dev'i özetle", "kullanici": "ali"}`.
-Veri seçimi kuralları: [`docs/veri-yapisi.md`](../docs/veri-yapisi.md) ("Veri seçimi (S1-05)").
+http://localhost:8000/docs → `POST /api/ask` → Try it out → `{"question": "#dev'i özetle", "user": "ali"}`.
+Data selection rules: [`docs/data-model.md`](../docs/data-model.md) ("Data selection (S1-05)").
 
-Sohbet anlaşması: [`docs/sohbet-anlasmasi.md`](../docs/sohbet-anlasmasi.md)
+API contract: [`docs/api-contract.md`](../docs/api-contract.md)

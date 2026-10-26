@@ -1,19 +1,19 @@
-# Agent Stack — Web Arayüzü
+# Agent Stack — Web Frontend
 
-React + Vite ile kurulan kullanıcı arayüzü iskeleti (S1-07).
+User interface skeleton built with React + Vite (S1-07).
 
-## Çalıştırma Adımları
+## How to Run
 
-1. Bağımlılıkları yükleyin:
+1. Install the dependencies:
    cd web
    npm install
 
-2. Ortam değişkeni dosyasını oluşturun (.env.example dosyasını .env olarak kopyalayın):
+2. Create the environment variable file (copy .env.example as .env):
    cp .env.example .env
-   (Windows PowerShell için: Copy-Item .env.example .env)
+   (For Windows PowerShell: Copy-Item .env.example .env)
 
-3. Geliştirme sunucusunu başlatın:
+3. Start the development server:
    npm run dev
 
-4. Tarayıcıda açın:
+4. Open in the browser:
    http://localhost:5173
