@@ -9,7 +9,7 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Lowest SQLite version needed for STRICT tables.
 MIN_SQLITE_VERSION = (3, 37, 0)
@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS channels (
     slack_id    TEXT PRIMARY KEY CHECK (length(slack_id) > 0),
     name        TEXT NOT NULL CHECK (length(name) > 0),
     is_private  INTEGER NOT NULL CHECK (is_private IN (0, 1)),
-    status      TEXT NOT NULL DEFAULT 'excluded' CHECK (status IN ('allowed', 'excluded')),
-    CHECK (NOT (lower(name) = 'ik' AND status = 'allowed'))
+    status      TEXT NOT NULL DEFAULT 'excluded' CHECK (status IN ('allowed', 'excluded', 'blocked'))
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS channel_memberships (

@@ -2,7 +2,8 @@
 
 Run (inside server/): .venv/Scripts/python -m app.slack_connector.sync [--days 30] [--from-scratch]
 
-- The allow list is checked again BEFORE every channel request: no request is made to Slack for an "excluded" channel.
+- The channel rule (by channel id) is checked again BEFORE every channel request: no request is made to Slack for an
+  "excluded" or "blocked" channel. The blocked list always wins.
 - The same message (channel + ts) is not written twice; running the command again is safe.
 - If a channel fails, it is written to the audit log and the other channels continue.
 - The token is never written to any output, the audit log or an error message.
@@ -20,7 +21,9 @@ from pathlib import Path
 
 from .. import settings
 from ..audit.log import write_event
-from ..database.rules import ALLOWED, EXCLUDED, channel_status
+from ..database.rules import (
+    ALLOWED, BLOCKED, EXCLUDED, blocked_list_error, channel_list_warnings, channel_status,
+)
 from ..database.schema import connect, create_tables
 from . import sanitize
 from .transform import channel_row, oldest_ts, skip_reason, ts_to_iso, user_row
@@ -38,7 +41,7 @@ class ChannelResult:
     """The result of one channel in this run. Carries no message text."""
 
     name: str
-    status: str  # "ok", "error" or "excluded"
+    status: str  # "ok", "error", "excluded" or "blocked"
     new_messages: int = 0
     fetched_messages: int = 0
     skipped: Counter = field(default_factory=Counter)  # skip reason (subtype name) -> count
@@ -93,8 +96,8 @@ def _failed_to_start(connection, summary: SyncSummary, reason_code: str, error: 
     return summary
 
 
-def _write_lists(connection, channels, users, *, from_scratch: bool) -> dict[str, ChannelResult]:
-    """Writes users and channels in one transaction; deletes messages and memberships of excluded channels."""
+def _write_lists(connection, channels, users, blocked, *, from_scratch: bool) -> dict[str, ChannelResult]:
+    """Writes users and channels in one transaction; deletes messages and memberships of excluded and blocked channels."""
     seen = {row["slack_id"] for row, _ in channels}
     previously_allowed = {s[0] for s in connection.execute(
         "SELECT slack_id FROM channels WHERE status = ?", (ALLOWED,)
@@ -123,19 +126,24 @@ def _write_lists(connection, channels, users, *, from_scratch: bool) -> dict[str
         # A channel no longer seen in the Slack list (archived, deleted, bot removed) is not read.
         for (slack_id,) in connection.execute("SELECT slack_id FROM channels").fetchall():
             if slack_id not in seen:
-                connection.execute("UPDATE channels SET status = ? WHERE slack_id = ?", (EXCLUDED, slack_id))
-        # Old data of an excluded channel is not kept.
-        for slack_id, name in connection.execute(
-            "SELECT slack_id, name FROM channels WHERE status = ?", (EXCLUDED,)
+                # Never "allowed": an empty allow list leaves only "blocked" or "excluded".
+                connection.execute(
+                    "UPDATE channels SET status = ? WHERE slack_id = ?",
+                    (channel_status(slack_id, [], blocked), slack_id),
+                )
+        # Old data of an excluded or blocked channel is not kept.
+        for slack_id, name, status in connection.execute(
+            "SELECT slack_id, name, status FROM channels WHERE status IN (?, ?)", (EXCLUDED, BLOCKED)
         ).fetchall():
             connection.execute("DELETE FROM channel_memberships WHERE channel_id = ?", (slack_id,))
             deleted = connection.execute("DELETE FROM messages WHERE channel_id = ?", (slack_id,)).rowcount
             if slack_id in seen or slack_id in previously_allowed or deleted:
-                results[slack_id] = ChannelResult(name=name, status=EXCLUDED, deleted_messages=deleted)
+                results[slack_id] = ChannelResult(name=name, status=status, deleted_messages=deleted)
     return results
 
 
-def _sync_channel(connection, client, row, bot_member, allowed, *, oldest, now, run_id, timer) -> ChannelResult:
+def _sync_channel(connection, client, row, bot_member, allowed, blocked, *, oldest, now, run_id,
+                  timer) -> ChannelResult:
     start = timer()
     channel_id = row["slack_id"]
     result = ChannelResult(name=row["name"], status="ok")
@@ -148,9 +156,10 @@ def _sync_channel(connection, client, row, bot_member, allowed, *, oldest, now, 
         )
         return result
 
-    # Defense: right before the request the status is computed again with the current name in Slack.
-    if channel_status(row["name"], allowed) != ALLOWED:
-        result.status = EXCLUDED
+    # Defense: right before the request the status is computed again from the channel id.
+    status = channel_status(channel_id, allowed, blocked)
+    if status != ALLOWED:
+        result.status = status
         return result
     if not bot_member:
         return error("BOT_NOT_IN_CHANNEL", "bot is not in the channel; invite it to the channel")
@@ -226,6 +235,7 @@ def sync_slack(
     client: SlackClient,
     allowed_channels: Iterable[str],
     *,
+    blocked_channels: Iterable[str],
     days: int,
     now: Callable[[], datetime],
     run_id: str,
@@ -235,13 +245,14 @@ def sync_slack(
     """Fetches and writes channels, users, members of allowed channels and messages of the last `days` days."""
     create_tables(connection)
     allowed = list(allowed_channels)
+    blocked = list(blocked_channels)
     start = timer()
     summary = SyncSummary(run_id=run_id, days=days)
 
     # 1. Lists: first all pages are fetched, then written.
     try:
         channels = [
-            (channel_row(c, allowed), c.get("is_member") is True)
+            (channel_row(c, allowed, blocked), c.get("is_member") is True)
             for c in paginate(
                 client, "conversations.list",
                 {"types": "public_channel,private_channel", "exclude_archived": "true",
@@ -263,7 +274,7 @@ def sync_slack(
 
     # 2. Users, channels and statuses in one transaction.
     try:
-        results = _write_lists(connection, channels, users, from_scratch=from_scratch)
+        results = _write_lists(connection, channels, users, blocked, from_scratch=from_scratch)
     except sqlite3.Error as e:
         return _failed_to_start(connection, summary, "DB_WRITE_FAILED", e, now=now,
                                 duration_ms=_duration_ms(timer, start))
@@ -275,7 +286,7 @@ def sync_slack(
         if row["status"] != ALLOWED:
             continue
         results[row["slack_id"]] = _sync_channel(
-            connection, client, row, bot_member, allowed,
+            connection, client, row, bot_member, allowed, blocked,
             oldest=oldest, now=now, run_id=run_id, timer=timer,
         )
 
@@ -298,9 +309,9 @@ def sync_slack(
 
 def _channel_line(r: ChannelResult, width: int) -> str:
     name = f"#{r.name}".ljust(width)
-    if r.status == EXCLUDED:
+    if r.status in (EXCLUDED, BLOCKED):
         extra = f", {r.deleted_messages} old messages deleted" if r.deleted_messages else ""
-        return f"{name} excluded  (no request made{extra})"
+        return f"{name} {r.status.ljust(9)} (no request made{extra})"
     if r.status == "error":
         return f"{name} ERROR     {r.reason_code} ({r.error_detail})"
     skipped = sum(r.skipped.values())
@@ -317,9 +328,10 @@ def print_summary(summary: SyncSummary, write: Callable[[str], None]) -> None:
     if summary.failed_to_start:
         write(f"ERROR {summary.failed_to_start} ({summary.error_detail}). No channel was synced.")
         return
-    allowed = sum(1 for r in summary.channels if r.status != EXCLUDED)
+    excluded = sum(1 for r in summary.channels if r.status == EXCLUDED)
+    blocked = sum(1 for r in summary.channels if r.status == BLOCKED)
     write(f"Users: {summary.user_count} · Channels: {len(summary.channels)} "
-          f"(allowed {allowed}, excluded {len(summary.channels) - allowed})")
+          f"(allowed {len(summary.channels) - excluded - blocked}, excluded {excluded}, blocked {blocked})")
     width = max((len(r.name) for r in summary.channels), default=0) + 1
     for r in summary.channels:
         write(_channel_line(r, width))
@@ -335,6 +347,7 @@ def run_command(
     client_factory: Callable[[str], SlackClient],
     database_path: str | Path,
     allowed_channels: Iterable[str],
+    blocked_channels: Iterable[str],
     now: Callable[[], datetime],
     write: Callable[[str], None],
     run_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
@@ -361,6 +374,14 @@ def run_command(
         write("SLACK_BOT_TOKEN is empty in .env. If you have no bot token, "
               "use the 'python -m app.slack_connector.seed load' command.")
         return 2
+    allowed_channels, blocked_channels = list(allowed_channels), list(blocked_channels)
+    # A wrongly written blocked list must not look like protection: nothing is fetched or written.
+    error = blocked_list_error(blocked_channels)
+    if error:
+        write(f"ERROR: {error}. Nothing was synced.")
+        return 2
+    for warning in channel_list_warnings(allowed_channels, blocked_channels):
+        write(f"WARNING: {warning}")
 
     client = client_factory(token)
     connection = connect(database_path)
@@ -370,7 +391,7 @@ def run_command(
         scratch_note = ", messages and memberships will be deleted first" if args.from_scratch else ""
         write(f"Slack sync started (last {args.days} days{scratch_note}). Run: {run_id[:12]}")
         summary = sync_slack(
-            connection, client, allowed_channels, days=args.days, now=now,
+            connection, client, allowed_channels, blocked_channels=blocked_channels, days=args.days, now=now,
             run_id=run_id, from_scratch=args.from_scratch,
         )
     finally:
@@ -391,6 +412,7 @@ def main() -> None:
         client_factory=lambda token: HttpxSlackClient(token, time.sleep),
         database_path=settings.DATABASE_PATH,
         allowed_channels=settings.ALLOWED_CHANNELS,
+        blocked_channels=settings.BLOCKED_CHANNELS,
         now=lambda: datetime.now(timezone.utc),
         write=print,
     ))

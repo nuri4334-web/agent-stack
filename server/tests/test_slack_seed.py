@@ -4,10 +4,10 @@ import pytest
 
 from app.slack_connector.sync import sync_slack
 from app.slack_connector.seed import (
-    SEED_PATH, SeedError, export_seed, write_seed_file, read_seed, load_seed,
+    SEED_PATH, SeedError, export_seed, write_seed_file, read_seed, load_seed, run_command,
 )
 from app.database.schema import connect
-from tests.fake_slack import ALLOWED, NOW, message, sample_slack
+from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, message, sample_slack
 
 SLACK_TABLES = ["channels", "slack_users", "channel_memberships", "messages"]
 D21_LIKE = (
@@ -24,8 +24,13 @@ def db():
 
 
 def _filled(db, slack=None):
-    sync_slack(db, slack or sample_slack(), ALLOWED, days=30, now=lambda: NOW, run_id="a1b2c3d4")
+    sync_slack(db, slack or sample_slack(), ALLOWED_IDS, blocked_channels=BLOCKED_IDS, days=30, now=lambda: NOW,
+               run_id="a1b2c3d4")
     return db
+
+
+def _load(db, data, allowed=ALLOWED_IDS, blocked=BLOCKED_IDS):
+    return load_seed(db, data, allowed, lambda: NOW, blocked_channels=blocked)
 
 
 def _empty_db():
@@ -50,8 +55,10 @@ def test_seed_export_then_load_into_empty_db_same_counts(db, tmp_path):
     path = tmp_path / "seed.json"
     write_seed_file(export_seed(db), path)
     new = _empty_db()
-    counts = load_seed(new, read_seed(path), ALLOWED, lambda: NOW)
-    assert counts == {"channels": 3, "allowed_channels": 3, "users": 4, "memberships": 9, "messages": 6}
+    counts = _load(new, read_seed(path))
+    assert counts == {
+        "channels": 3, "allowed_channels": 3, "blocked_channels": 0, "users": 4, "memberships": 9, "messages": 6,
+    }
     expected = _content(db)
     loaded = _content(new)
     assert loaded[0] == expected[0]
@@ -79,7 +86,7 @@ def test_load_into_filled_db_is_rejected(db, tmp_path):
     data = export_seed(db)
     before = _counts(db)
     with pytest.raises(SeedError):
-        load_seed(db, data, ALLOWED, lambda: NOW)
+        _load(db, data)
     assert _counts(db) == before
 
 
@@ -111,7 +118,7 @@ def test_fake_keys_with_example_stay_in_seed(db, tmp_path):
     path = tmp_path / "seed.json"
     write_seed_file(export_seed(db), path)
     new = _empty_db()
-    load_seed(new, read_seed(path), ALLOWED, lambda: NOW)
+    _load(new, read_seed(path))
     assert new.execute(
         "SELECT clean_text FROM messages WHERE channel_id = 'C_DEV' AND clean_text LIKE 'SLACK_BOT%'"
     ).fetchone() == (D21_LIKE,)
@@ -137,7 +144,7 @@ def test_rejected_if_used_token_appears_in_message(db, tmp_path):
 def test_loader_allow_list_is_applied(db, tmp_path):
     _filled(db)
     new = _empty_db()
-    counts = load_seed(new, export_seed(db), ["genel", "yonetim"], lambda: NOW)
+    counts = _load(new, export_seed(db), allowed=["C_GENEL", "C_YON"])
     assert counts["allowed_channels"] == 2
     assert new.execute("SELECT status FROM channels WHERE slack_id = 'C_DEV'").fetchone() == ("excluded",)
     assert new.execute("SELECT count(*) FROM messages WHERE channel_id = 'C_DEV'").fetchone() == (0,)
@@ -153,7 +160,70 @@ def test_repo_seed_file_is_valid():
     names = [c["name"] for c in data["channels"]]
     assert "ik" not in [n.lower() for n in names]
     new = _empty_db()
-    counts = load_seed(new, data, names, lambda: NOW)
+    counts = _load(new, data, allowed=[c["slack_id"] for c in data["channels"]], blocked=[])
     assert counts["messages"] == len(data["messages"])
     assert counts["memberships"] == len(data["channel_memberships"])
     new.close()
+
+
+def _data_with_ik(db):
+    """Exported seed plus the fake #ik channel with a membership and a message (as if written by hand)."""
+    data = export_seed(db)
+    data["channels"].append({"slack_id": "C_IK", "name": "ik", "is_private": 1})
+    data["channel_memberships"].append({"channel_id": "C_IK", "slack_user_id": "U_NURI"})
+    data["messages"].append({
+        "channel_id": "C_IK", "ts": "1792700000.000100", "author_id": "U_NURI",
+        "sent_at": "2026-10-23T10:00:00+00:00", "clean_text": "TEST - ik message",
+    })
+    return data
+
+
+def test_load_blocked_wins(db):
+    _filled(db)
+    new = _empty_db()
+    counts = _load(new, _data_with_ik(db), allowed=ALLOWED_IDS + ["C_IK"], blocked=["C_IK"])
+    assert (counts["allowed_channels"], counts["blocked_channels"]) == (3, 1)
+    assert new.execute("SELECT status FROM channels WHERE slack_id = 'C_IK'").fetchone() == ("blocked",)
+    assert new.execute("SELECT count(*) FROM messages WHERE channel_id = 'C_IK'").fetchone() == (0,)
+    assert new.execute("SELECT count(*) FROM channel_memberships WHERE channel_id = 'C_IK'").fetchone() == (0,)
+    new.close()
+
+
+def test_load_with_old_name_allowlist_loads_no_messages(db):
+    _filled(db)
+    new = _empty_db()
+    counts = _load(new, export_seed(db), allowed=["genel", "dev", "yonetim"], blocked=[])
+    assert (counts["channels"], counts["allowed_channels"], counts["messages"], counts["memberships"]) == (3, 0, 0, 0)
+    assert {s[0] for s in new.execute("SELECT status FROM channels")} == {"excluded"}
+    new.close()
+
+
+def _run_load(db_path, seed_path, allowed, blocked, lines):
+    return run_command(
+        ["load", "--file", str(seed_path)], database_path=db_path, allowed_channels=allowed,
+        blocked_channels=blocked, now=lambda: NOW, write=lines.append,
+    )
+
+
+def test_seed_command_warns_for_old_names(db, tmp_path):
+    _filled(db)
+    seed_path = tmp_path / "seed.json"
+    write_seed_file(export_seed(db), seed_path)
+    lines = []
+    assert _run_load(tmp_path / "test.db", seed_path, ["genel", "dev", "yonetim"], BLOCKED_IDS, lines) == 0
+    assert lines[0] == (
+        "WARNING: ALLOWED_CHANNELS now takes channel IDs (e.g. C0123ABCDEF); "
+        "these values are ignored: genel, dev, yonetim"
+    )
+    assert lines[-1] == "Loaded: 3 channels (allowed 0, blocked 0), 4 users, 0 memberships, 0 messages."
+
+
+def test_seed_command_stops_for_invalid_blocked_value(db, tmp_path):
+    _filled(db)
+    seed_path = tmp_path / "seed.json"
+    write_seed_file(export_seed(db), seed_path)
+    db_path = tmp_path / "test.db"
+    lines = []
+    assert _run_load(db_path, seed_path, ALLOWED_IDS, ["ik"], lines) == 2
+    assert lines == ["ERROR: BLOCKED_CHANNELS takes channel IDs; invalid values: ik. Nothing was loaded."]
+    assert not db_path.exists()

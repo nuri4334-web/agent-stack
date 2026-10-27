@@ -66,8 +66,8 @@ def should_keep_message(message: object) -> bool:
     return skip_reason(message) is None
 
 
-def channel_row(channel: object, allowed_channels: Iterable[str]) -> dict:
-    """Turns a conversations.list record into a channels row; status is computed from the allow list every time."""
+def channel_row(channel: object, allowed_channels: Iterable[str], blocked_channels: Iterable[str]) -> dict:
+    """Turns a conversations.list record into a channels row; status is computed from the channel id every time."""
     if not isinstance(channel, dict):
         raise ValueError("Channel record is invalid.")
     slack_id, name = channel.get("id"), channel.get("name")
@@ -77,7 +77,7 @@ def channel_row(channel: object, allowed_channels: Iterable[str]) -> dict:
         "slack_id": slack_id,
         "name": name,
         "is_private": 1 if channel.get("is_private") is True else 0,
-        "status": channel_status(name, allowed_channels),
+        "status": channel_status(slack_id, allowed_channels, blocked_channels),
     }
 
 

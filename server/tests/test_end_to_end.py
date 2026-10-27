@@ -122,6 +122,50 @@ def test_not_allowed_channel_no_access_ai_not_called(sent, question):
     assert _call_rows() == []
 
 
+def test_blocked_id_no_access_even_if_table_says_allowed(sent):
+    # Stale data: the table says "allowed" for #ik (e.g. written before the id was blocked).
+    connection = connect(settings.DATABASE_PATH)
+    try:
+        with connection:
+            connection.execute(
+                "INSERT INTO channels (slack_id, name, is_private, status) VALUES ('C_IK', 'ik', 1, 'allowed')"
+            )
+            connection.execute(
+                "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) VALUES "
+                "('C_IK', '1792665999.000002', ?, '2026-10-22T10:46:39+00:00', 'TEST - ik message')",
+                (ALI,),
+            )
+    finally:
+        connection.close()
+    assert settings.BLOCKED_CHANNELS == ["C_IK"]
+    r = _ask("#ik'i özetle")
+    assert r.status_code == 200
+    assert r.json()["status"] == "no_access"
+    assert ai.fake_call_count() == 0
+    assert sent == []
+    assert _call_rows() == []
+    r = _ask("geçen hafta neler oldu?")
+    assert r.json()["status"] == "ok"
+    assert set(LINE_START.findall(sent[0])) == {"dev", "genel", "yonetim"}
+    assert "TEST - ik message" not in sent[0]
+
+
+def test_old_name_settings_logged_once(sent, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "ALLOWED_CHANNELS", ["genel", "dev", "yonetim"])
+    with caplog.at_level(logging.WARNING, logger="agentstack"):
+        first = _ask("#dev'i özetle")
+        second = _ask("geçen hafta neler oldu?")
+    assert first.json()["status"] == "no_access"
+    assert second.json()["answer"] == gateway.NO_MESSAGES_ANSWER
+    assert ai.fake_call_count() == 0
+    assert sent == []
+    warnings = [r.getMessage() for r in caplog.records if "now takes channel IDs" in r.getMessage()]
+    assert warnings == [
+        "Channel settings: ALLOWED_CHANNELS now takes channel IDs (e.g. C0123ABCDEF); "
+        "these values are ignored: genel, dev, yonetim"
+    ]
+
+
 def test_ai_not_called_if_no_messages(sent, monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(settings, "DATABASE_PATH", tmp_path / "empty.db")
     with caplog.at_level(logging.WARNING, logger="agentstack"):

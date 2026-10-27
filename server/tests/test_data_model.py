@@ -81,7 +81,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 3
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -94,21 +94,22 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 3")
+    connection.execute("PRAGMA user_version = 4")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()
 
 
-def test_older_schema_version_is_rejected():
+@pytest.mark.parametrize("old_version", [1, 2])
+def test_older_schema_version_is_rejected(old_version):
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 1")
+    connection.execute(f"PRAGMA user_version = {old_version}")
     with pytest.raises(RuntimeError, match="older than the code"):
         create_tables(connection)
     assert connection.execute(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
     ).fetchone()[0] == 0
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == old_version
     connection.close()
 
 
@@ -203,19 +204,24 @@ def test_new_channel_default_excluded(db):
     assert statuses == ["excluded", "excluded"]
 
 
-def test_channel_status_only_allowed_or_excluded(db):
-    for status in ["public", "private", "exclude"]:
+def test_channel_status_only_allowed_excluded_or_blocked(db):
+    for status in ["public", "private", "exclude", "BLOCKED", ""]:
         with pytest.raises(sqlite3.IntegrityError):
             _add_channel(db, "C1", "dev", status=status)
 
 
-def test_ik_channel_cannot_be_allowed_in_table(db):
-    for name in ["ik", "IK"]:
-        with pytest.raises(sqlite3.IntegrityError):
-            _add_channel(db, "C9", name, is_private=1, status="allowed")
-    _add_channel(db, "C9", "ik", is_private=1)
-    with pytest.raises(sqlite3.IntegrityError):
-        db.execute("UPDATE channels SET status = 'allowed' WHERE slack_id = 'C9'")
+def test_blocked_status_accepted(db):
+    _add_channel(db, "C1", "dev", status="blocked")
+    _add_channel(db, "C2", "genel")
+    statuses = [s[0] for s in db.execute("SELECT status FROM channels ORDER BY slack_id")]
+    assert statuses == ["blocked", "excluded"]
+
+
+def test_channel_name_has_no_rule_in_table(db):
+    # MIG-B: the table does not look at the name; the blocked list (by id, in .env) is applied in sync, seed load
+    # and at question time (see test_blocked_id_no_access_even_if_table_says_allowed).
+    _add_channel(db, "C9", "ik", is_private=1, status="allowed")
+    assert db.execute("SELECT status FROM channels WHERE slack_id = 'C9'").fetchone() == ("allowed",)
 
 
 def test_channel_and_ts_cannot_be_written_twice(db):

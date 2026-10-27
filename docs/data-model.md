@@ -4,7 +4,7 @@ The server's SQLite tables. Sprint 1 · S1-03. The schema itself: `server/app/da
 
 - The database is opened with Python's own `sqlite3` module; there is no extra package, ORM or migration tool.
 - The file location is the `DATABASE_PATH` setting in `.env` (a relative path is resolved from the repo root). Tests use an in-memory (`:memory:`) database or a seeded database in a temporary folder; they never touch the real file.
-- The schema version is kept in `PRAGMA user_version`; the current version is **2**. If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
+- The schema version is kept in `PRAGMA user_version`; the current version is **3** (MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
 - All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.37.0 is needed).
 - Time fields are ISO 8601 text (e.g. `2026-10-22T14:05:00+03:00`). The database does not fill in the time itself; the writing code always gives the time.
 - There is no cascading delete (`ON DELETE CASCADE`).
@@ -61,10 +61,13 @@ Slack channels and whether the assistant can read them.
 | `slack_id` | Slack channel id (e.g. `C123`). |
 | `name` | Channel name, without `#` (e.g. `dev`). |
 | `is_private` | 1 if the channel is private in Slack, otherwise 0. |
-| `status` | `allowed` or `excluded`; a new channel always starts as `excluded`; being private or not does not change this. |
+| `status` | `allowed`, `excluded` or `blocked`; a new channel always starts as `excluded`; being private or not does not change this. |
 
-The status is computed from the allow list in `.env` (`ALLOWED_CHANNELS`) with the `channel_status()` rule (`server/app/database/rules.py`).
-The `ik` channel stays `excluded` even if it is written on the allow list: the rule has a fixed blocked list, and the table does not accept `allowed` for `ik`.
+The status is computed from the **channel id** (`slack_id`) with the `channel_status()` rule (`server/app/database/rules.py`) and the two lists in `.env`, both written as Slack channel IDs:
+`BLOCKED_CHANNELS` (never read) and `ALLOWED_CHANNELS` (allow list). The blocked list always wins: an id on the blocked list is `blocked` even if it is also on the allow list.
+An id on the allow list is `allowed`; every other channel is `excluded`. The channel name never decides (a name can be changed in Slack, the id cannot); the table has no rule about names.
+A value on a list that is not a channel id (`C…` or `G…`, upper case letters and digits) opens no channel.
+Note: the channel status `blocked` (a channel on `BLOCKED_CHANNELS`) is not the same thing as `audit_events.blocked_count` or `security.blocked` in the API (things blocked by a filter).
 
 ## 5. `channel_memberships`
 
@@ -168,9 +171,11 @@ Code: `server/app/slack_connector/`. Commands run inside `server/`:
 Sync rules:
 
 - The token is read only from `SLACK_BOT_TOKEN` in `.env`; it is never written to the screen, the audit log, an error message or the seed file.
-- The status of channels is computed again on every run with the current name in Slack and `ALLOWED_CHANNELS`. Right before a member or message request for a channel, the status is computed once more; no request at all is made to Slack for an `excluded` channel.
-- A channel no longer seen in the Slack channel list (archived, deleted, bot removed from a private channel) becomes `excluded`.
-- The messages and memberships of every channel with status `excluded` are deleted; the channel row stays (the audit log may point to it).
+- The status of channels is computed again on every run from the channel id with `ALLOWED_CHANNELS` and `BLOCKED_CHANNELS`. Right before a member or message request for a channel, the status is computed once more from the id; no request at all is made to Slack for an `excluded` or `blocked` channel.
+- A renamed channel keeps its id, so it keeps its status; a new channel opened with an old name has a new id and starts as `excluded`.
+- A channel no longer seen in the Slack channel list (archived, deleted, bot removed from a private channel) becomes `excluded` (or `blocked` if its id is on `BLOCKED_CHANNELS`); never `allowed`.
+- The messages and memberships of every channel with status `excluded` or `blocked` are deleted; the channel row stays (the audit log may point to it).
+- Before starting, the command checks the lists: a value in `BLOCKED_CHANNELS` that is not a channel id stops it (`ERROR: BLOCKED_CHANNELS takes channel IDs; invalid values: …`, exit code 2, nothing is fetched or written). A value in `ALLOWED_CHANNELS` that is not a channel id, an empty `ALLOWED_CHANNELS` and an id on both lists give a `WARNING:` line; the command goes on.
 - If the bot is not in an allowed channel, no request is made for that channel and a `BOT_NOT_IN_CHANNEL` record is written.
 - The member list of every allowed channel is renewed in one transaction: a membership row no longer in Slack is deleted, the `updated_at` of the others is renewed.
 - Only people's plain messages are written: every message with a subtype (`subtype`) (joined the channel, bot message, channel renamed, reply sent from a thread to the channel, etc.), a message with no author or an empty text is skipped. The screen shows the number skipped per channel and the breakdown of reasons (e.g. `3 skipped: channel_join 3`); this breakdown is not written to the audit log.
@@ -185,7 +190,7 @@ Seed data, default file `demo-data/slack-seed.json`:
 - JSON, UTF-8, LF. Fields: `format` (`agentstack-slack-seed`), `version` (2), `channels` (`slack_id`, `name`, `is_private`), `slack_users` (`slack_id`, `display_name`, `real_name`, `is_bot`), `channel_memberships` (`channel_id`, `slack_user_id`), `messages` (`channel_id`, `ts`, `author_id`, `sent_at`, `clean_text`). The loader accepts only version 2.
 - Only allowed channels, their memberships and messages, and the users these rows mention go in. The audit log, AI calls, people, linked accounts, `status`, `updated_at` and `is_suspicious` do not.
 - Secret check (when writing and reading): the token used for syncing cannot appear in the file; every text matching the `xox?-`, `ghp_`, `AIza`, `AKIA` patterns must contain `EXAMPLE`. A file that fails the check is not written or loaded; the error message shows only the name of the pattern.
-- `load` loads only into a database whose Slack tables are empty. The channel status is computed again with the loader's `ALLOWED_CHANNELS` list; memberships and messages of a channel that comes out `excluded` are not loaded.
+- `load` loads only into a database whose Slack tables are empty. The channel status is computed again from the channel id with the loader's `ALLOWED_CHANNELS` and `BLOCKED_CHANNELS` lists (the seed file has no status); memberships and messages of a channel that comes out `excluded` or `blocked` are not loaded. The same list checks as in sync apply (an invalid `BLOCKED_CHANNELS` value stops `load`, exit code 2, nothing is loaded).
 
 ## Data selection (S1-05)
 
@@ -194,9 +199,11 @@ Code: `server/app/data_selection/`. The gateway's step 3 (`gateway.data_selectio
 - A channel name is recognized only in the `#name` form; the name goes on with letters, digits, `_` and `-` and stops at an apostrophe (`#dev'i`, `#yonetim'de` → `dev`, `yonetim`). Upper/lower case does not matter. If more than one name appears, all are selected.
 - Names without `#` are not recognized ("genel olarak…", "dev bir sorun", "yonetim hakkında"); these questions go to all allowed channels.
 - `#` expressions made only of digits ("PR #17", "#1 öncelik") are not channel names; they are ignored.
-- If at least one of the names in the question is not in the database or its status is `excluded` (e.g. `#ik`, `#bugs`), the request stops: the AI is not called, the answer status is `no_access`. This is a channel-level check, not per-person authorization (Stage 2).
-- If the question has no channel name, all channels with status `allowed` are read.
-- The query also always applies the `channels.status = 'allowed'` condition; a message of an `excluded` channel is never selected by any path.
+- The name in the question is turned into a channel row by the `name` in the table; the permission is checked from that row's id and status.
+- If at least one of the names in the question is not in the database, belongs to more than one row (e.g. a stale old name), or is not `allowed` (e.g. `#ik`, `#bugs`), the request stops: the AI is not called, the answer status is `no_access`. This is a channel-level check, not per-person authorization (Stage 2).
+- At question time a channel is read only if it is `allowed` in the table **and** by the current `.env` lists (`ALLOWED_CHANNELS`, `BLOCKED_CHANNELS`); so a channel blocked or removed from the allow list in `.env` is not read even before the next sync or seed load. List warnings are written to the server log once per process.
+- If the question has no channel name, all channels with status `allowed` are read (with the same question-time check).
+- The query also always applies the `channels.status = 'allowed'` condition; a message of an `excluded` or `blocked` channel is never selected by any path.
 - At most 50 messages (in total, not per channel) are selected: the newest 50 messages (by `ts`), sent to the AI from oldest to newest.
 - Author name: `real_name`, otherwise `display_name`, otherwise `slack_id`. The `<@U…>` and `<#C…>` mentions in the text are turned into readable names only in the data sent to the AI (`@Ali Kaya`, `#yonetim`); `clean_text` does not change, other `<…>` forms stay as they are.
 - If there are no messages in the selected channels, the AI is not called and the answer is "No messages were found for this question." If the `channels` table is completely empty, the server log says to run `seed load` or `sync` first.

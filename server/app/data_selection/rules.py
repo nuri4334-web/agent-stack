@@ -35,21 +35,25 @@ def find_target_channels(
 ) -> tuple[TargetResult, list[str]]:
     """Channel ids to read. `channels`: (slack_id, name, status) rows.
 
-    "no_slack_data" if the channels table is empty. If the question names channels, each must exist and be "allowed";
-    if even one is not, "channel_not_allowed" and an empty list. If no name is given, all allowed channels.
+    "no_slack_data" if the channels table is empty. If the question names channels, each name must belong to exactly
+    one row and that row must be "allowed"; if even one is not (unknown, more than one row with the name, not allowed),
+    "channel_not_allowed" and an empty list. If no name is given, all allowed channels.
     """
     if not channels:
         return "no_slack_data", []
     names = channels_in_question(question)
     if not names:
         return "ok", [slack_id for slack_id, _, status in channels if status == ALLOWED]
-    by_name = {normalize_channel_name(name): (slack_id, status) for slack_id, name, status in channels}
+    by_name: dict[str, list[tuple[str, str]]] = {}
+    for slack_id, name, status in channels:
+        by_name.setdefault(normalize_channel_name(name), []).append((slack_id, status))
     targets = []
     for name in names:
-        channel = by_name.get(name)
-        if channel is None or channel[1] != ALLOWED:
+        rows = by_name.get(name, [])
+        # More than one row with the same name (e.g. a stale old name): the safe side is to refuse.
+        if len(rows) != 1 or rows[0][1] != ALLOWED:
             return "channel_not_allowed", []
-        targets.append(channel[0])
+        targets.append(rows[0][0])
     return "ok", targets
 
 
