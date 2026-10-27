@@ -1,4 +1,4 @@
-"""Sunucu giriş noktası. Çalıştırma: server klasöründe `uvicorn app.main:app --reload`"""
+"""Server entry point. Run in the server folder: `uvicorn app.main:app --reload`"""
 import logging
 
 from fastapi import FastAPI, Request
@@ -7,9 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 
-from .yapay_zeka import YapayZekaHatasi
-from . import ayarlar, kapi
-from .sema import HataCevabi, SoruCevabi, SoruIstegi
+from .ai import AIError
+from . import settings, gateway
+from .schemas import ErrorResponse, AskResponse, AskRequest
 
 
 log = logging.getLogger("agentstack")
@@ -18,45 +18,45 @@ app = FastAPI(title="Agent Stack", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ayarlar.ARAYUZ_ADRESLERI,
+    allow_origins=settings.FRONTEND_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
 
 
-def hata(durum_kodu: int, kod: str, mesaj: str) -> JSONResponse:
-    govde = HataCevabi(hata={"kod": kod, "mesaj": mesaj})
-    return JSONResponse(status_code=durum_kodu, content=govde.model_dump())
+def error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    body = ErrorResponse(error={"code": code, "message": message})
+    return JSONResponse(status_code=status_code, content=body.model_dump())
 
 
-@app.exception_handler(YapayZekaHatasi)
-async def yapay_zeka_hatasi_yakala(_: Request, exc: YapayZekaHatasi):
-    if exc.kod == "ZAMAN_ASIMI":
-        return hata(504, "ZAMAN_ASIMI", exc.mesaj)
-    return hata(502, "SAGLAYICI_HATASI", exc.mesaj)
+@app.exception_handler(AIError)
+async def handle_ai_error(_: Request, exc: AIError):
+    if exc.code == "TIMEOUT":
+        return error_response(504, "TIMEOUT", exc.message)
+    return error_response(502, "PROVIDER_ERROR", exc.message)
 
 
 @app.exception_handler(RequestValidationError)
-async def gecersiz_istek(_: Request, __: RequestValidationError):
-    return hata(422, "GECERSIZ_ISTEK", "İstek biçimi hatalı. Sohbet anlaşmasına bakın.")
+async def handle_invalid_request(_: Request, __: RequestValidationError):
+    return error_response(422, "INVALID_REQUEST", "Invalid request format. See the API contract.")
 
 
 @app.exception_handler(Exception)
-async def beklenmeyen_hata(_: Request, exc: Exception):
-    # İsteğin içeriğini loglamıyoruz: içinde şirket verisi olabilir.
-    log.error("Beklenmeyen hata: %s", type(exc).__name__)
-    return hata(500, "SUNUCU_HATASI", "Sunucuda beklenmeyen bir hata oluştu.")
+async def handle_unexpected_error(_: Request, exc: Exception):
+    # We do not log the request content: it may contain company data.
+    log.error("Unexpected error: %s", type(exc).__name__)
+    return error_response(500, "SERVER_ERROR", "An unexpected server error occurred.")
 
 
-@app.get("/saglik")
-def saglik():
-    return {"durum": "ayakta"}
+@app.get("/health")
+def health():
+    return {"status": "up"}
 
 
 @app.post(
-    "/api/soru",
-    response_model=SoruCevabi,
-    responses={422: {"model": HataCevabi}, 500: {"model": HataCevabi}},
+    "/api/ask",
+    response_model=AskResponse,
+    responses={422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
 )
-def soru_gonder(istek: SoruIstegi) -> SoruCevabi:
-    return kapi.soru_isle(soru=istek.soru, kullanici=istek.kullanici)
+def ask(request: AskRequest) -> AskResponse:
+    return gateway.handle_question(question=request.question, user=request.user)

@@ -1,8 +1,8 @@
-# Agent Stack Slack uygulaması: yalnızca okuma izinleri.
-# Kurulum: api.slack.com/apps -> Create New App -> From a manifest -> bu dosyayı yapıştır.
+# Agent Stack Slack app: read-only permissions.
+# Setup: api.slack.com/apps -> Create New App -> From a manifest -> paste this file.
 display_information:
   name: agentstack-bot
-  description: Agent Stack demo botu (yalnızca okuma)
+  description: Agent Stack demo bot (read only)
 features:
   bot_user:
     display_name: agentstack-bot

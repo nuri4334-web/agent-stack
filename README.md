@@ -2,30 +2,30 @@
 
 Security-first AI assistant for company data (Slack). Permission checks, secret masking, prompt-injection defense and attack tests.
 
-Şirket verisini (önce Slack) yapay zekâ asistanına güvenli şekilde veren açık kaynak bir sistem. Temel ilke: **yapay zekâ kandırılsa bile hiçbir şey sızmasın.** Güvenlik modelin iyi davranmasına değil, mimariye dayanır.
+An open source system that gives company data (Slack first) to an AI assistant safely. Core principle: **even if the AI is tricked, nothing leaks.** Security comes from the architecture, not from the model behaving well.
 
-> Durum: POC, geliştirme aşamasında (Sprint 1). Yalnızca test Slack'indeki sahte veriyle çalışır.
+> Status: POC, in development (Sprint 1). Works only with fake data in the test Slack.
 
-## Klasörler
+## Folders
 
-| Klasör | Ne var? |
+| Folder | What is inside? |
 |---|---|
-| `server/` | Python (FastAPI) sunucu: güvenlik kapısı, Slack bağlayıcısı, yapay zekâ bağlantısı, filtreler, olay kaydı, veritabanı (SQLite). |
-| `web/` | React arayüz: sohbet ekranı ve güvenlik paneli. İçinde hiçbir anahtar yoktur. |
-| `demo-verisi/` | Sahte demo verisi: senaryo dokümanı, sır kataloğu örnekleri, başlangıç verisi. Anahtar taramasında hariç tutulur. |
-| `slack-manifest.yaml` | Slack uygulamasının hazır tanımı (yalnızca okuma izinleri). |
+| `server/` | Python (FastAPI) server: security gateway, Slack connector, AI connection, filters, audit log, database (SQLite). |
+| `web/` | React frontend: chat screen and security panel. It contains no keys. |
+| `demo-data/` | Fake demo data: scenario document, secret catalog examples, seed data. Excluded from secret scanning. |
+| `slack-manifest.yaml` | Ready definition of the Slack app (read-only permissions). |
 
-## Tek yol kuralı
+## Single path rule
 
-Yapay zekâya giden her istek güvenlik kapısından geçer. Yapay zekâ bağlantısını yalnızca kapı çağırır; arayüz yapay zekâya hiçbir zaman doğrudan ulaşmaz.
+Every request that goes to the AI passes through the security gateway. Only the gateway calls the AI connection; the frontend never reaches the AI directly.
 
-## Kurulum (geliştirme)
+## Setup (development)
 
-1. `.env.example` dosyasını `.env` olarak kopyala ve kendi değerlerini gir. `.env` repoya girmez.
-2. Sunucu ve arayüz kurulum adımları Sprint 1'de eklenecek.
+1. Copy `.env.example` as `.env` and enter your own values. `.env` never goes into the repo.
+2. Server and frontend setup steps will be added in Sprint 1.
 
-## Güvenlik kuralları
+## Security rules
 
-- Gerçek anahtar, şifre ya da kişisel bilgi asla repoya girmez.
-- Herkes kendi Gemini anahtarını kullanır; anahtarlar paylaşılmaz.
-- Ana dala giren her kod başka biri tarafından incelenir.
+- A real key, password or personal information never goes into the repo.
+- Everyone uses their own Gemini key; keys are not shared.
+- Every change that goes into the main branch is reviewed by someone else.

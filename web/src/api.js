@@ -1,23 +1,23 @@
-// Sunucu adresi ayardan okunur (Arayüzde hiçbir gizli anahtar yoktur)
+// The server address is read from a setting (the frontend has no secret keys)
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// S1-07: Sahte sohbet akışı (S1-09'da sadece fetch'e çevrilecek)
-export async function soruSor(soru, kullanici = 'ali') {
+// S1-07: Fake chat flow (S1-09 will only switch this to fetch)
+export async function askQuestion(question, user = 'ali') {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
-        istek_id: 'sahte-istek-001',
-        durum: 'tamam',
-        cevap: `"${soru}" sorusu için (${kullanici}) sahte yanıt: #dev kanalında bu hafta login sayfası ve API bağlantıları konuşuldu.`,
-        kaynaklar: [
+        request_id: 'fake-request-001',
+        status: 'ok',
+        answer: `Fake answer for the question "${question}" (${user}): this week in #dev the login page and API connections were discussed.`,
+        sources: [
           {
-            kanal: 'dev',
-            yazan: 'Deniz',
-            zaman: '2026-10-22T14:05:00+03:00',
-            metin: '@Ali login sayfasını sen al',
+            channel: 'dev',
+            author: 'Deniz',
+            time: '2026-10-22T14:05:00+03:00',
+            text: '@Ali you take the login page',
           },
         ],
-        guvenlik: { engellenen: 0, maskelenen: 0, supheli: 0 },
+        security: { blocked: 0, masked: 0, suspicious: 0 },
       });
     }, 1000);
   });

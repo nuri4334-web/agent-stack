@@ -1,4 +1,4 @@
-# --- Gizli ayarlar ---
+# --- Secret settings ---
 .env
 .env.*
 !.env.example
@@ -17,7 +17,7 @@ venv/
 .coverage
 htmlcov/
 
-# --- Veritabanı ---
+# --- Database ---
 *.db
 *.sqlite
 *.sqlite3
@@ -28,7 +28,7 @@ web/dist/
 web/build/
 npm-debug.log*
 
-# --- Editör ve sistem ---
+# --- Editor and system ---
 .vscode/
 .idea/
 .DS_Store

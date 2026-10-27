@@ -1,50 +1,50 @@
 import { useState } from 'react';
-import { API_URL, soruSor } from './api';
+import { API_URL, askQuestion } from './api';
 
-// Geçici kullanıcı ve rol sabitleri (Aşama 2'de oturumdan gelecek)
-// Rolü 'admin' yaparsanız Güvenlik Paneli sekmesi görünür
-const AKTIF_KULLANICI = { ad: 'ali', rol: 'kullanici' }; // 'kullanici' | 'admin'
+// Temporary user and role constants (will come from the session in Stage 2)
+// If you set the role to 'admin', the Security Panel tab becomes visible
+const CURRENT_USER = { name: 'ali', role: 'user' }; // 'user' | 'admin'
 
 export default function App() {
-  // 3 sayfa arasında geçiş: 'giris' | 'sohbet' | 'panel'
-  const [aktifSayfa, setAktifSayfa] = useState('sohbet');
-  const [profilAcik, setProfilAcik] = useState(false);
+  // Switching between 3 pages: 'login' | 'chat' | 'panel'
+  const [activePage, setActivePage] = useState('chat');
+  const [profileOpen, setProfileOpen] = useState(false);
 
-  // Sohbet akışı durumları
-  const [soru, setSoru] = useState('');
-  const [gonderilenSoru, setGonderilenSoru] = useState('');
-  const [yaziyor, setYaziyor] = useState(false);
-  const [cevapVerisi, setCevapVerisi] = useState(null);
-  const [hataMesaji, setHataMesaji] = useState('');
+  // Chat flow state
+  const [question, setQuestion] = useState('');
+  const [sentQuestion, setSentQuestion] = useState('');
+  const [typing, setTyping] = useState(false);
+  const [answerData, setAnswerData] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const soruGonder = async (e) => {
+  const sendQuestion = async (e) => {
     e.preventDefault();
-    if (!soru.trim() || yaziyor) return;
+    if (!question.trim() || typing) return;
 
-    const mevcutSoru = soru;
-    setGonderilenSoru(mevcutSoru);
-    setSoru('');
-    setYaziyor(true);
-    setCevapVerisi(null);
-    setHataMesaji('');
+    const currentQuestion = question;
+    setSentQuestion(currentQuestion);
+    setQuestion('');
+    setTyping(true);
+    setAnswerData(null);
+    setErrorMessage('');
 
     try {
-      const sonuc = await soruSor(mevcutSoru, AKTIF_KULLANICI.ad);
-      if (sonuc.hata) {
-        setHataMesaji(sonuc.hata.mesaj || 'Bir hata oluştu.');
+      const result = await askQuestion(currentQuestion, CURRENT_USER.name);
+      if (result.error) {
+        setErrorMessage(result.error.message || 'An error occurred.');
       } else {
-        setCevapVerisi(sonuc);
+        setAnswerData(result);
       }
     } catch (err) {
-      setHataMesaji(err?.hata?.mesaj || 'Sunucuya ulaşılamadı.');
+      setErrorMessage(err?.error?.message || 'Could not reach the server.');
     } finally {
-      setYaziyor(false);
+      setTyping(false);
     }
   };
 
   return (
     <div>
-      {/* Üst Menü: 3 Sayfa Arasında Geçiş */}
+      {/* Top Menu: Switching Between 3 Pages */}
       <header className="navbar">
         <div className="brand">
           ASP <span>Agent Stack Project</span>
@@ -52,53 +52,53 @@ export default function App() {
 
         <nav className="nav-links">
           <button
-            className={`nav-link ${aktifSayfa === 'giris' ? 'active' : ''}`}
-            onClick={() => setAktifSayfa('giris')}
+            className={`nav-link ${activePage === 'login' ? 'active' : ''}`}
+            onClick={() => setActivePage('login')}
           >
-            Giriş
+            Login
           </button>
           <button
-            className={`nav-link ${aktifSayfa === 'sohbet' ? 'active' : ''}`}
-            onClick={() => setAktifSayfa('sohbet')}
+            className={`nav-link ${activePage === 'chat' ? 'active' : ''}`}
+            onClick={() => setActivePage('chat')}
           >
-            Sohbet
+            Chat
           </button>
 
-          {/* Güvenlik Paneli yalnızca admin rolüne görünür */}
-          {AKTIF_KULLANICI.rol === 'admin' && (
+          {/* The Security Panel is visible only to the admin role */}
+          {CURRENT_USER.role === 'admin' && (
             <button
-              className={`nav-link ${aktifSayfa === 'panel' ? 'active' : ''}`}
-              onClick={() => setAktifSayfa('panel')}
+              className={`nav-link ${activePage === 'panel' ? 'active' : ''}`}
+              onClick={() => setActivePage('panel')}
             >
-              Güvenlik Paneli
+              Security Panel
             </button>
           )}
 
-          {/* Profil & Bağlı Hesaplar Açılır Menüsü */}
+          {/* Profile & Linked Accounts Dropdown */}
           <div className="profile-wrapper">
             <button
               className="profile-pill"
-              onClick={() => setProfilAcik(!profilAcik)}
+              onClick={() => setProfileOpen(!profileOpen)}
             >
               <div className="avatar">
-                {AKTIF_KULLANICI.ad.slice(0, 2).toUpperCase()}
+                {CURRENT_USER.name.slice(0, 2).toUpperCase()}
               </div>
               <div style={{ textAlign: 'left', fontSize: '12px' }}>
-                <div style={{ fontWeight: 600 }}>{AKTIF_KULLANICI.ad}</div>
+                <div style={{ fontWeight: 600 }}>{CURRENT_USER.name}</div>
                 <div style={{ color: '#94A3B8', fontSize: '11px' }}>
-                  {AKTIF_KULLANICI.rol === 'admin' ? 'Admin' : 'Kullanıcı'}
+                  {CURRENT_USER.role === 'admin' ? 'Admin' : 'User'}
                 </div>
               </div>
               <div className="status-dot" />
             </button>
 
-            {profilAcik && (
+            {profileOpen && (
               <div className="popover">
                 <div style={{ fontSize: '12px', color: '#94A3B8', marginBottom: '4px' }}>
-                  Profil & Bağlı Hesaplar
+                  Profile & Linked Accounts
                 </div>
-                <button className="popover-btn">🔗 Jira hesabını bağla</button>
-                <button className="popover-btn">🔗 GitHub hesabını bağla</button>
+                <button className="popover-btn">🔗 Link Jira account</button>
+                <button className="popover-btn">🔗 Link GitHub account</button>
               </div>
             )}
           </div>
@@ -106,26 +106,26 @@ export default function App() {
       </header>
 
       <main className="container">
-        {/* 1. SAYFA: GİRİŞ */}
-        {aktifSayfa === 'giris' && (
+        {/* PAGE 1: LOGIN */}
+        {activePage === 'login' && (
           <div className="card">
-            <h2>Giriş Ekranı (İskelet)</h2>
+            <h2>Login Screen (Skeleton)</h2>
             <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Aşama 2&apos;de aktifleşecek giriş ve Slack ile giriş ekranı iskeleti.
+              Skeleton of the login and Sign in with Slack screen, active in Stage 2.
             </p>
           </div>
         )}
 
-        {/* 2. SAYFA: SOHBET */}
-        {aktifSayfa === 'sohbet' && (
+        {/* PAGE 2: CHAT */}
+        {activePage === 'chat' && (
           <div>
             <div className="card">
-              <h2>Sohbet</h2>
+              <h2>Chat</h2>
               <p style={{ color: '#94A3B8', fontSize: '13px', marginTop: '4px' }}>
-                Bağlı Sunucu Adresi (Ayardan Okunan): <code>{API_URL}</code>
+                Connected Server Address (Read from Settings): <code>{API_URL}</code>
               </p>
 
-              {gonderilenSoru && (
+              {sentQuestion && (
                 <div style={{ marginTop: '20px', textAlign: 'right' }}>
                   <span
                     style={{
@@ -136,20 +136,20 @@ export default function App() {
                       borderRadius: '10px',
                     }}
                   >
-                    {gonderilenSoru}
+                    {sentQuestion}
                   </span>
                 </div>
               )}
 
-              {/* "Yazıyor..." Bekleme Durumu */}
-              {yaziyor && (
+              {/* "Typing…" Waiting State */}
+              {typing && (
                 <div className="meta-box" style={{ marginTop: '16px', color: '#38BDF8' }}>
-                  Yazıyor...
+                  Typing…
                 </div>
               )}
 
-              {/* Hata Durumu */}
-              {hataMesaji && !yaziyor && (
+              {/* Error State */}
+              {errorMessage && !typing && (
                 <div
                   className="meta-box"
                   style={{
@@ -158,12 +158,12 @@ export default function App() {
                     borderColor: '#EF4444',
                   }}
                 >
-                  {hataMesaji}
+                  {errorMessage}
                 </div>
               )}
 
-              {/* Cevap, Kaynaklar ve Güvenlik Özeti */}
-              {cevapVerisi && !yaziyor && (
+              {/* Answer, Sources and Security Summary */}
+              {answerData && !typing && (
                 <div style={{ marginTop: '20px' }}>
                   <div
                     style={{
@@ -174,19 +174,19 @@ export default function App() {
                       lineHeight: '1.5',
                     }}
                   >
-                    {/* Düz metin gösterimi */}
-                    {cevapVerisi.cevap}
+                    {/* Plain text display */}
+                    {answerData.answer}
                   </div>
 
                   <div className="meta-box">
-                    <strong>Dayandığı Mesajlar (Kaynaklar):</strong>
-                    {cevapVerisi.kaynaklar.length === 0 ? (
-                      <div>Kaynak yok</div>
+                    <strong>Messages It Is Based On (Sources):</strong>
+                    {answerData.sources.length === 0 ? (
+                      <div>No sources</div>
                     ) : (
                       <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
-                        {cevapVerisi.kaynaklar.map((k) => (
-                          <li key={`${k.kanal}-${k.zaman}`}>
-                            #{k.kanal} — {k.yazan}: &quot;{k.metin}&quot;
+                        {answerData.sources.map((s) => (
+                          <li key={`${s.channel}-${s.time}`}>
+                            #{s.channel} — {s.author}: &quot;{s.text}&quot;
                           </li>
                         ))}
                       </ul>
@@ -194,36 +194,36 @@ export default function App() {
                   </div>
 
                   <div className="meta-box">
-                    <strong>Güvenlik Özeti: </strong>
-                    Engellenen: {cevapVerisi.guvenlik.engellenen} | Maskelenen:{' '}
-                    {cevapVerisi.guvenlik.maskelenen} | Şüpheli:{' '}
-                    {cevapVerisi.guvenlik.supheli}
+                    <strong>Security Summary: </strong>
+                    Blocked: {answerData.security.blocked} | Masked:{' '}
+                    {answerData.security.masked} | Suspicious:{' '}
+                    {answerData.security.suspicious}
                   </div>
                 </div>
               )}
 
-              <form className="input-row" onSubmit={soruGonder}>
+              <form className="input-row" onSubmit={sendQuestion}>
                 <input
                   type="text"
                   className="text-input"
-                  placeholder="Sorunuzu yazın... (Örn: #dev'i özetle)"
-                  value={soru}
-                  onChange={(e) => setSoru(e.target.value)}
+                  placeholder="Type your question... (e.g. summarize #dev)"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
                 />
-                <button type="submit" className="btn-primary" disabled={yaziyor}>
-                  Gönder
+                <button type="submit" className="btn-primary" disabled={typing}>
+                  Send
                 </button>
               </form>
             </div>
           </div>
         )}
 
-        {/* 3. SAYFA: GÜVENLİK PANELİ */}
-        {aktifSayfa === 'panel' && AKTIF_KULLANICI.rol === 'admin' && (
+        {/* PAGE 3: SECURITY PANEL */}
+        {activePage === 'panel' && CURRENT_USER.role === 'admin' && (
           <div className="card">
-            <h2>Güvenlik Paneli (İskelet)</h2>
+            <h2>Security Panel (Skeleton)</h2>
             <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Yalnızca admin rolüne görünecek güvenlik olayları paneli iskeleti.
+              Skeleton of the security events panel, visible only to the admin role.
             </p>
           </div>
         )}
