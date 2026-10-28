@@ -39,7 +39,7 @@ class RequestContext:
     """The information carried along a question's journey through the gateway."""
 
     question: str
-    user: str
+    user: str | None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "ok"
     selected_messages: list[SourceMessage] = field(default_factory=list)
@@ -183,7 +183,7 @@ STEPS = [
 ]
 
 
-def handle_question(question: str, user: str, now: Callable[[], datetime] = _utc_now) -> AskResponse:
+def handle_question(question: str, user: str | None, now: Callable[[], datetime] = _utc_now) -> AskResponse:
     c = RequestContext(question=question, user=user, now=now)
     # Every request opens its own connection (FastAPI requests run in separate threads).
     c.connection = connect(settings.DATABASE_PATH)

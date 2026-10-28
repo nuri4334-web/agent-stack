@@ -3,10 +3,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app import settings
+from app import ai, settings
 from app.data_selection import selection
+from app.main import app
 from app.slack_connector import seed
 from app.database.schema import connect
+from tests.auth_clients import make_anonymous_client, make_client_as
 
 # Channel id lists for tests (independent of .env): genel, dev, yonetim of the demo seed; C_IK is the fake #ik.
 TEST_ALLOWED_CHANNELS = ["C0C8ATRM073", "C0C83M051QD", "C0CB44VUCF2"]
@@ -54,3 +56,36 @@ def _default_fake_provider(monkeypatch):
     """
     monkeypatch.setattr(settings, "AI_PROVIDER", "fake")
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_attempts():
+    """S2-03 resets the login attempt counter here before every test; there is no counter yet."""
+    yield
+
+
+@pytest.fixture
+def client_as():
+    """client_as("ali") -> a new client signed in as that test account (names: auth_clients.FIXTURE_ACCOUNTS)."""
+    return lambda name: make_client_as(app, name)
+
+
+@pytest.fixture
+def anonymous_client():
+    """anonymous_client() -> a new client without a session cookie."""
+    return lambda: make_anonymous_client(app)
+
+
+@pytest.fixture
+def sent_to_ai(monkeypatch):
+    """Captures the data texts sent to the AI; calls the real fake provider (the counter works, starts at 0)."""
+    captured = []
+    real = ai.ask
+
+    def spy(instruction, data):
+        captured.append(data)
+        return real(instruction=instruction, data=data)
+
+    monkeypatch.setattr(ai, "ask", spy)
+    ai.reset_fake_counter()
+    return captured

@@ -1,5 +1,6 @@
 """Server entry point. Run in the server folder: `uvicorn app.main:app --reload`"""
 import logging
+import re
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -14,14 +15,33 @@ from .schemas import ErrorResponse, AskResponse, AskRequest
 
 log = logging.getLogger("agentstack")
 
+# An exact origin: http:// or https://, a host name and an optional port; no path, no trailing "/".
+ORIGIN_FORMAT = re.compile(r"https?://[a-z0-9.-]+(:[0-9]{1,5})?")
+ORIGIN_ERROR = (
+    "FRONTEND_ORIGINS must list exact origins like http://localhost:5173 (no path, no trailing slash); "
+    "'*' and 'null' are not allowed."
+)
+
+
+def cors_options(origins: list[str]) -> dict[str, object]:
+    """CORS settings for the frontend (API contract v3). An empty list is valid: no browser access.
+
+    The session cookie is sent, so a wildcard or 'null' origin would let any site send requests with it.
+    """
+    if any(not ORIGIN_FORMAT.fullmatch(origin) for origin in origins):
+        raise ValueError(ORIGIN_ERROR)
+    return {
+        "allow_origins": list(origins),
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST"],
+        "allow_headers": ["Content-Type"],
+        "expose_headers": ["Retry-After"],
+    }
+
+
 app = FastAPI(title="Agent Stack", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.FRONTEND_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
-)
+app.add_middleware(CORSMiddleware, **cors_options(settings.FRONTEND_ORIGINS))
 
 
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:
