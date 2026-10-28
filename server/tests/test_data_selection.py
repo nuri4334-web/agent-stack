@@ -120,7 +120,7 @@ def test_fifty_message_limit_newest_fifty():
                 "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) VALUES ('C1', ?, 'U1', ?, ?)",
                 (f"{1792000000 + i}.000000", f"2026-10-22T10:{i // 60:02d}:{i % 60:02d}+00:00", f"message {i}"),
             )
-    selection = select_messages(connection, "#dev'i özetle")
+    selection = select_messages(connection, "#dev'i özetle", allowed_channels=["C1"], blocked_channels=[])
     connection.close()
     assert len(selection.messages) == 50
     assert [m.text for m in selection.messages] == [f"message {i}" for i in range(11, 61)]
@@ -131,7 +131,51 @@ def test_empty_list_if_allowed_channel_has_no_messages():
     create_tables(connection)
     with connection:
         connection.execute("INSERT INTO channels (slack_id, name, is_private, status) VALUES ('C1', 'dev', 0, 'allowed')")
-    selection = select_messages(connection, "#dev'i özetle")
+    selection = select_messages(connection, "#dev'i özetle", allowed_channels=["C1"], blocked_channels=[])
     connection.close()
     assert selection.result == "ok"
     assert selection.messages == []
+
+
+def test_same_name_two_rows_rejected():
+    for statuses in [("allowed", "excluded"), ("allowed", "allowed"), ("excluded", "allowed")]:
+        channels = [("C1", "dev", statuses[0]), ("C2", "Dev", statuses[1]), (GENEL, "genel", "allowed")]
+        assert find_target_channels("#dev'i özetle", channels) == ("channel_not_allowed", [])
+        assert find_target_channels("#genel ve #dev", channels) == ("channel_not_allowed", [])
+        assert find_target_channels("#genel", channels) == ("ok", [GENEL])
+
+
+def test_renamed_channel_question_mapping():
+    # #dev was renamed to dev-eski; a new channel was opened with the name dev (not on the allow list).
+    channels = [(DEV, "dev-eski", "allowed"), ("C0NEWDEV001", "dev", "excluded")]
+    assert find_target_channels("#dev'i özetle", channels) == ("channel_not_allowed", [])
+    assert find_target_channels("#dev-eski'yi özetle", channels) == ("ok", [DEV])
+
+
+def test_question_time_blocklist_wins(seeded):
+    # The table still says "allowed" for dev (no sync since the setting changed).
+    assert seeded.execute("SELECT status FROM channels WHERE slack_id = ?", (DEV,)).fetchone() == ("allowed",)
+    lists = {"allowed_channels": [DEV, GENEL, YONETIM], "blocked_channels": [DEV]}
+    selection = select_messages(seeded, "#dev'i özetle", **lists)
+    assert (selection.result, selection.messages) == ("channel_not_allowed", [])
+    selection = select_messages(seeded, "geçen hafta neler oldu?", **lists)
+    assert selection.result == "ok"
+    assert {m.channel for m in selection.messages} == {"genel", "yonetim"}
+
+
+def test_question_time_removed_from_allowlist_not_read(seeded):
+    selection = select_messages(seeded, "#dev'i özetle", allowed_channels=[GENEL, YONETIM], blocked_channels=[])
+    assert (selection.result, selection.messages) == ("channel_not_allowed", [])
+    selection = select_messages(seeded, "#genel", allowed_channels=[], blocked_channels=[])
+    assert (selection.result, selection.messages) == ("channel_not_allowed", [])
+
+
+def test_question_time_uses_settings_by_default(seeded, monkeypatch):
+    monkeypatch.setattr(settings, "BLOCKED_CHANNELS", [DEV])
+    assert select_messages(seeded, "#dev'i özetle").result == "channel_not_allowed"
+
+
+def test_query_layer_drops_blocked_even_if_target_decision_wrong(seeded, monkeypatch):
+    monkeypatch.setattr(selection_module, "find_target_channels", lambda question, c: ("ok", [DEV, GENEL]))
+    selection = select_messages(seeded, "herhangi", allowed_channels=[DEV, GENEL, YONETIM], blocked_channels=[DEV])
+    assert {m.channel for m in selection.messages} == {"genel"}

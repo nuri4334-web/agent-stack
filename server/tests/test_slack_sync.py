@@ -3,11 +3,13 @@ from datetime import datetime
 import pytest
 
 from app.slack_connector import sanitize
-from app.slack_connector.sync import run_command, print_summary, sync_slack
+from app.data_selection.selection import select_messages
+from app.slack_connector.sync import _sync_channel, run_command, print_summary, sync_slack
 from app.database.schema import connect
-from tests.fake_slack import ALLOWED, NOW, message, sample_slack, ts
+from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, channel, message, sample_slack, ts
 
 CHANNEL_ENDPOINTS = {"conversations.members", "conversations.history"}
+OLD_NAMES = ["genel", "dev", "yonetim"]
 
 
 @pytest.fixture
@@ -18,8 +20,10 @@ def db():
     connection.close()
 
 
-def _sync(db, slack, allowed=ALLOWED, run_id="a1b2c3d4", **options):
-    return sync_slack(db, slack, allowed, days=30, now=lambda: NOW, run_id=run_id, **options)
+def _sync(db, slack, allowed=ALLOWED_IDS, run_id="a1b2c3d4", blocked=BLOCKED_IDS, **options):
+    return sync_slack(
+        db, slack, allowed, blocked_channels=blocked, days=30, now=lambda: NOW, run_id=run_id, **options,
+    )
 
 
 def _count(db, sql, *params):
@@ -55,13 +59,93 @@ def test_no_member_or_message_request_for_excluded_channel(db):
     assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_SALES'") == "excluded"
 
 
-def test_ik_not_fetched_even_if_in_allowlist(db):
+def test_blocked_id_not_fetched_even_if_in_allowlist(db):
     slack = sample_slack()
-    _sync(db, slack, allowed=ALLOWED + ["ik", "#IK"])
+    _sync(db, slack, allowed=ALLOWED_IDS + ["C_IK", "ik", "#IK"], blocked=["C_IK"])
     assert slack.channel_calls("C_IK") == []
     assert _message_count(db, "C_IK") == 0
     assert _count(db, "SELECT count(*) FROM channel_memberships WHERE channel_id = 'C_IK'") == 0
-    assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_IK'") == "excluded"
+    assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_IK'") == "blocked"
+
+
+def test_old_name_allowlist_opens_no_channel(db):
+    slack = sample_slack()
+    summary = _sync(db, slack, allowed=OLD_NAMES + ["ik"], blocked=[])
+    assert not any(endpoint in CHANNEL_ENDPOINTS for endpoint, _ in slack.calls)
+    assert {s[0] for s in db.execute("SELECT status FROM channels")} == {"excluded"}
+    assert _message_count(db) == 0
+    assert _count(db, "SELECT count(*) FROM channel_memberships") == 0
+    assert summary.channel_count == 0
+
+
+def test_renamed_channel_stays_allowed_new_channel_with_old_name_excluded(db):
+    slack = sample_slack()
+    _sync(db, slack)
+    # #dev is renamed in Slack and a new channel is opened with the old name.
+    slack.channels[1]["name"] = "dev-eski"
+    slack.channels.append(channel("C_DEV2", "dev"))
+    slack.members["C_DEV2"] = ["U_ALI", "U_BOT"]
+    slack.messages["C_DEV"].append(message("U_ALI", "yeni ad", 1, 400))
+    slack.messages["C_DEV2"] = [message("U_ALI", "TEST - new channel with old name", 1, 100)]
+    slack.calls.clear()
+    _sync(db, slack, run_id="e5f6")
+    assert db.execute("SELECT name, status FROM channels WHERE slack_id = 'C_DEV'").fetchone() == (
+        "dev-eski", "allowed",
+    )
+    assert _message_count(db, "C_DEV") == 4
+    assert slack.channel_calls("C_DEV2") == []
+    assert db.execute("SELECT name, status FROM channels WHERE slack_id = 'C_DEV2'").fetchone() == (
+        "dev", "excluded",
+    )
+    assert _message_count(db, "C_DEV2") == 0
+    # At question time the name goes to the new (excluded) channel: refused; the new name reads the old id.
+    lists = {"allowed_channels": ALLOWED_IDS, "blocked_channels": BLOCKED_IDS}
+    assert select_messages(db, "#dev'i özetle", **lists).result == "channel_not_allowed"
+    renamed = select_messages(db, "#dev-eski'yi özetle", **lists)
+    assert renamed.result == "ok"
+    assert {m.channel for m in renamed.messages} == {"dev-eski"}
+    assert len(renamed.messages) == 4
+
+
+def test_channel_blocked_later_data_deleted(db):
+    slack = sample_slack()
+    _sync(db, slack)
+    assert _message_count(db, "C_DEV") == 3
+    slack.calls.clear()
+    summary = _sync(db, slack, blocked=BLOCKED_IDS + ["C_DEV"], run_id="e5f6")
+    assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_DEV'") == "blocked"
+    assert _message_count(db, "C_DEV") == 0
+    assert _count(db, "SELECT count(*) FROM channel_memberships WHERE channel_id = 'C_DEV'") == 0
+    assert slack.channel_calls("C_DEV") == []
+    dev = next(c for c in summary.channels if c.name == "dev")
+    assert (dev.status, dev.deleted_messages) == ("blocked", 3)
+    lines = []
+    print_summary(summary, lines.append)
+    assert "(allowed 2, excluded 1, blocked 2)" in lines[0]
+    assert any(s.startswith("#dev") and "blocked" in s and "3 old messages deleted" in s for s in lines)
+
+
+def test_second_check_uses_id_and_blocklist(db):
+    slack = sample_slack()
+    _sync(db, slack)
+    slack.calls.clear()
+    # The row looks allowed (e.g. computed earlier), but right before the request the id is blocked.
+    row = {"slack_id": "C_DEV", "name": "dev", "is_private": 0, "status": "allowed"}
+    result = _sync_channel(
+        db, slack, row, True, ALLOWED_IDS, ["C_DEV"],
+        oldest="0.000000", now=lambda: NOW, run_id="e5f6", timer=lambda: 0.0,
+    )
+    assert result.status == "blocked"
+    assert slack.calls == []
+
+
+def test_channel_missing_in_slack_and_blocked_becomes_blocked(db):
+    slack = sample_slack()
+    _sync(db, slack)
+    slack.channels = [c for c in slack.channels if c["id"] != "C_DEV"]
+    _sync(db, slack, allowed=ALLOWED_IDS, blocked=BLOCKED_IDS + ["C_DEV"], run_id="e5f6")
+    assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_DEV'") == "blocked"
+    assert _message_count(db, "C_DEV") == 0
 
 
 def test_private_yonetim_messages_are_fetched(db):
@@ -146,7 +230,8 @@ def test_member_who_left_is_deleted_on_next_sync(db):
     _sync(db, slack)
     slack.members["C_DEV"].remove("U_DENIZ")
     later = "2026-10-24T12:00:00+00:00"
-    sync_slack(db, slack, ALLOWED, days=30, now=lambda: datetime.fromisoformat(later), run_id="e5f6")
+    sync_slack(db, slack, ALLOWED_IDS, blocked_channels=BLOCKED_IDS, days=30,
+               now=lambda: datetime.fromisoformat(later), run_id="e5f6")
     members = db.execute(
         "SELECT slack_user_id, updated_at FROM channel_memberships WHERE channel_id = 'C_DEV' "
         "ORDER BY slack_user_id"
@@ -188,7 +273,7 @@ def test_sanitize_called_before_writing(db, monkeypatch):
 def test_data_of_channel_removed_from_allowlist_is_deleted(db):
     slack = sample_slack()
     _sync(db, slack)
-    _sync(db, slack, allowed=["genel", "yonetim"], run_id="e5f6")
+    _sync(db, slack, allowed=["C_GENEL", "C_YON"], run_id="e5f6")
     assert _count(db, "SELECT status FROM channels WHERE slack_id = 'C_DEV'") == "excluded"
     assert _message_count(db, "C_DEV") == 0
     assert _count(db, "SELECT count(*) FROM channel_memberships WHERE channel_id = 'C_DEV'") == 0
@@ -249,7 +334,8 @@ def test_does_not_start_without_token(tmp_path):
     def run(argv, token):
         return run_command(
             argv, token=token, client_factory=lambda t: created.append(t) or sample_slack(),
-            database_path=path, allowed_channels=ALLOWED, now=lambda: NOW, write=lines.append,
+            database_path=path, allowed_channels=ALLOWED_IDS, blocked_channels=BLOCKED_IDS, now=lambda: NOW,
+            write=lines.append,
         )
 
     assert run([], "") == 2
@@ -258,3 +344,36 @@ def test_does_not_start_without_token(tmp_path):
     assert created == []
     assert not path.exists()
     assert "SLACK_BOT_TOKEN" in lines[0]
+
+
+def _run_sync_command(path, allowed, blocked, lines, created):
+    return run_command(
+        [], token="xoxb-EXAMPLE-0000", client_factory=lambda t: created.append(t) or sample_slack(),
+        database_path=path, allowed_channels=allowed, blocked_channels=blocked, now=lambda: NOW,
+        write=lines.append, run_id_factory=lambda: "a1b2c3d4e5f6",
+    )
+
+
+def test_sync_command_warns_for_old_names(tmp_path):
+    path = tmp_path / "test.db"
+    lines, created = [], []
+    assert _run_sync_command(path, OLD_NAMES, BLOCKED_IDS, lines, created) == 0
+    assert lines[0] == (
+        "WARNING: ALLOWED_CHANNELS now takes channel IDs (e.g. C0123ABCDEF); "
+        "these values are ignored: genel, dev, yonetim"
+    )
+    assert "WARNING: ALLOWED_CHANNELS is empty; no channel will be read." in lines
+    output = "\n".join(lines)
+    assert "xoxb-EXAMPLE-0000" not in output
+    connection = connect(path)
+    assert connection.execute("SELECT count(*) FROM messages").fetchone() == (0,)
+    connection.close()
+
+
+def test_sync_command_stops_for_invalid_blocked_value(tmp_path):
+    path = tmp_path / "test.db"
+    lines, created = [], []
+    assert _run_sync_command(path, ALLOWED_IDS, ["C_IK", "ik"], lines, created) == 2
+    assert lines == ["ERROR: BLOCKED_CHANNELS takes channel IDs; invalid values: ik. Nothing was synced."]
+    assert created == []
+    assert not path.exists()

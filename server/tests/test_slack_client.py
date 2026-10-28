@@ -90,7 +90,8 @@ def test_token_in_no_output(tmp_path, capsys, caplog):
     result = sync.run_command(
         [], token=TOKEN,
         client_factory=lambda t: HttpxSlackClient(t, waits.append, transport=httpx.MockTransport(handler)),
-        database_path=db_path, allowed_channels=["dev", "genel"], now=lambda: NOW, write=print,
+        database_path=db_path, allowed_channels=["C_DEV", "C_GENEL"], blocked_channels=[], now=lambda: NOW,
+        write=print,
     )
     assert result == 1
     assert waits == [1, 1]
@@ -116,8 +117,8 @@ def test_token_in_no_output(tmp_path, capsys, caplog):
     # Seed export.
     seed_path = tmp_path / "seed.json"
     assert seed.run_command(
-        ["export", "--file", str(seed_path)], database_path=db_path, allowed_channels=["dev"],
-        now=lambda: NOW, write=print, token=TOKEN,
+        ["export", "--file", str(seed_path)], database_path=db_path, allowed_channels=["C_DEV"],
+        blocked_channels=[], now=lambda: NOW, write=print, token=TOKEN,
     ) == 0
 
     connection = connect(db_path)

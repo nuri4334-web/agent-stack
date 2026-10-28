@@ -1,10 +1,18 @@
 """Data selection query (S1-05): reads only messages of allowed channels from the S1-04 tables."""
+import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from .. import settings
 from ..schemas import SourceMessage
-from ..database.rules import ALLOWED
+from ..database.rules import ALLOWED, channel_list_warnings, channel_status
 from .rules import MESSAGE_LIMIT, TargetResult, author_name, find_target_channels, resolve_slack_mentions
+
+log = logging.getLogger("agentstack")
+
+# Channel setting warnings already written to the server log (each one once per process).
+_reported_warnings: set[str] = set()
 
 
 @dataclass
@@ -13,10 +21,43 @@ class Selection:
     messages: list[SourceMessage] = field(default_factory=list)  # oldest to newest
 
 
-def select_messages(connection: sqlite3.Connection, question: str, *, limit: int = MESSAGE_LIMIT) -> Selection:
-    """Selects the newest `limit` messages for the question. Does not open or close the connection; only reads."""
-    channels = connection.execute("SELECT slack_id, name, status FROM channels ORDER BY slack_id").fetchall()
+def reset_reported_warnings() -> None:
+    """Forgets which setting warnings were logged (for tests, so they do not depend on the order)."""
+    _reported_warnings.clear()
+
+
+def _report_warnings(allowed: list[str], blocked: list[str]) -> None:
+    for warning in channel_list_warnings(allowed, blocked):
+        if warning not in _reported_warnings:
+            _reported_warnings.add(warning)
+            log.warning("Channel settings: %s", warning)
+
+
+def select_messages(
+    connection: sqlite3.Connection,
+    question: str,
+    *,
+    limit: int = MESSAGE_LIMIT,
+    allowed_channels: Iterable[str] | None = None,
+    blocked_channels: Iterable[str] | None = None,
+) -> Selection:
+    """Selects the newest `limit` messages for the question. Does not open or close the connection; only reads.
+
+    A channel is read only if it is "allowed" in the table AND by the current settings (allow and blocked lists
+    by channel id; None -> the settings at call time). So a channel blocked in .env is not read even before a sync.
+    """
+    allowed = list(settings.ALLOWED_CHANNELS if allowed_channels is None else allowed_channels)
+    blocked = list(settings.BLOCKED_CHANNELS if blocked_channels is None else blocked_channels)
+    _report_warnings(allowed, blocked)
+    channels = [
+        (slack_id, name, status if status != ALLOWED else channel_status(slack_id, allowed, blocked))
+        for slack_id, name, status in connection.execute(
+            "SELECT slack_id, name, status FROM channels ORDER BY slack_id"
+        ).fetchall()
+    ]
     result, targets = find_target_channels(question, channels)
+    # The current settings are applied to the target list too, even if the target decision is wrong.
+    targets = [t for t in targets if channel_status(t, allowed, blocked) == ALLOWED]
     return Selection(result, _messages(connection, targets, channels, limit) if result == "ok" else [])
 
 

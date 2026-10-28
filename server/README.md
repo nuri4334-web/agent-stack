@@ -57,12 +57,27 @@ Inside `server/`, with the venv:
 ```
 
 `--days` default is 30; the demo messages were written on 22 October 2026, so to get them in a real sync after about 21 November, increase `--days` or use the seed.
-The schema version is 2. If you have an older local database, delete `server/agentstack.db` and run `seed load` again.
+The schema version is 3. If you have an older local database, delete `server/agentstack.db` and run `seed load` again.
 Details: [`docs/data-model.md`](../docs/data-model.md) ("Slack sync and seed data").
+
+## Channel IDs
+
+`ALLOWED_CHANNELS` and `BLOCKED_CHANNELS` in `.env` take Slack **channel IDs** (e.g. `C0123ABCDEF`), comma separated, not names.
+A channel name can be changed in Slack; its ID cannot, so a name never allows a channel.
+
+- Where to find a channel ID: in Slack click the channel name → channel details → **Channel ID** at the bottom;
+  or, in the browser while the channel is open, the last part of the address.
+- `BLOCKED_CHANNELS`: channels that are never read (write the IDs of HR, finance and similar channels here).
+  It always wins: an ID on both lists is not read (in sync, in `seed load` and at question time).
+- Empty `ALLOWED_CHANNELS`: no channel is read. Empty `BLOCKED_CHANNELS`: valid, no channel is blocked.
+- A value that is not an ID (e.g. an old `ALLOWED_CHANNELS=genel,dev,yonetim`) opens no channel; `sync` and `seed load`
+  print `WARNING: ALLOWED_CHANNELS now takes channel IDs ...` and the server logs the same warning once.
+- A value that is not an ID in `BLOCKED_CHANNELS` (e.g. `ik`) stops `sync` and `seed load` (exit code 2, nothing is written).
 
 ## End-to-end try
 
-Inside `server/`, with the venv (`ALLOWED_CHANNELS=genel,dev,yonetim`, `AI_PROVIDER=fake` in `.env`):
+Inside `server/`, with the venv (in `.env`: `ALLOWED_CHANNELS` with the demo channel IDs of genel, dev and yonetim,
+`BLOCKED_CHANNELS` with the ID of ik, `AI_PROVIDER=fake`):
 
 ```powershell
 # If the database does not exist or is empty

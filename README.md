@@ -22,6 +22,7 @@ Every request that goes to the AI passes through the security gateway. Only the 
 ## Setup (development)
 
 1. Copy `.env.example` as `.env` and enter your own values. `.env` never goes into the repo.
+   The channel lists (`ALLOWED_CHANNELS`, `BLOCKED_CHANNELS`) take Slack channel IDs, not names: see "Channel IDs" in [`server/README.md`](server/README.md).
 2. Server and frontend setup steps will be added in Sprint 1.
 
 ## Security rules

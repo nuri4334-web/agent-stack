@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import settings
-from ..database.rules import ALLOWED, channel_status
+from ..database.rules import ALLOWED, BLOCKED, blocked_list_error, channel_list_warnings, channel_status
 from ..database.schema import connect, create_tables
 from .transform import is_valid_ts
 
@@ -174,8 +174,13 @@ def load_seed(
     data: dict,
     allowed_channels: Iterable[str],
     now: Callable[[], datetime],
+    *,
+    blocked_channels: Iterable[str],
 ) -> dict[str, int]:
-    """Loads the seed into an empty database in one transaction. Channel status is computed again with the loader's allow list."""
+    """Loads the seed into an empty database in one transaction.
+
+    Channel status is computed again from the channel id with the loader's allow and blocked lists (blocked wins).
+    """
     create_tables(connection)
     for table in SLACK_TABLES:
         if connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]:
@@ -184,8 +189,11 @@ def load_seed(
                 "For a new database, delete the database file (server/agentstack.db)."
             )
     allowed = list(allowed_channels)
+    blocked = list(blocked_channels)
     updated_at = now().isoformat()
-    counts = {"channels": 0, "allowed_channels": 0, "users": 0, "memberships": 0, "messages": 0}
+    counts = {
+        "channels": 0, "allowed_channels": 0, "blocked_channels": 0, "users": 0, "memberships": 0, "messages": 0,
+    }
     allowed_ids = set()
     try:
         with connection:
@@ -197,7 +205,7 @@ def load_seed(
                 )
                 counts["users"] += 1
             for c in data["channels"]:
-                status = channel_status(c["name"], allowed)
+                status = channel_status(c["slack_id"], allowed, blocked)
                 connection.execute(
                     "INSERT INTO channels (slack_id, name, is_private, status) VALUES (?, ?, ?, ?)",
                     (c["slack_id"], c["name"], c["is_private"], status),
@@ -205,6 +213,8 @@ def load_seed(
                 counts["channels"] += 1
                 if status == ALLOWED:
                     allowed_ids.add(c["slack_id"])
+                elif status == BLOCKED:
+                    counts["blocked_channels"] += 1
             counts["allowed_channels"] = len(allowed_ids)
             for m in data["channel_memberships"]:
                 if m["channel_id"] in allowed_ids:
@@ -233,6 +243,7 @@ def run_command(
     *,
     database_path: str | Path,
     allowed_channels: Iterable[str],
+    blocked_channels: Iterable[str],
     now: Callable[[], datetime],
     write: Callable[[str], None],
     token: str = "",
@@ -269,14 +280,23 @@ def run_command(
                   f"{len(data['messages'])} messages.")
             return 0
 
+        allowed_channels, blocked_channels = list(allowed_channels), list(blocked_channels)
+        # A wrongly written blocked list must not look like protection: nothing is loaded.
+        error = blocked_list_error(blocked_channels)
+        if error:
+            write(f"ERROR: {error}. Nothing was loaded.")
+            return 2
+        for warning in channel_list_warnings(allowed_channels, blocked_channels):
+            write(f"WARNING: {warning}")
         data = read_seed(args.file, token)
         connection = connect(database_path)
         try:
             create_tables(connection)
-            counts = load_seed(connection, data, allowed_channels, now)
+            counts = load_seed(connection, data, allowed_channels, now, blocked_channels=blocked_channels)
         finally:
             connection.close()
-        write(f"Loaded: {counts['channels']} channels (allowed {counts['allowed_channels']}), "
+        write(f"Loaded: {counts['channels']} channels (allowed {counts['allowed_channels']}, "
+              f"blocked {counts['blocked_channels']}), "
               f"{counts['users']} users, {counts['memberships']} memberships, {counts['messages']} messages.")
         return 0
     except SeedError as error:
@@ -289,6 +309,7 @@ def main() -> None:
         sys.argv[1:],
         database_path=settings.DATABASE_PATH,
         allowed_channels=settings.ALLOWED_CHANNELS,
+        blocked_channels=settings.BLOCKED_CHANNELS,
         now=lambda: datetime.now(timezone.utc),
         write=print,
         token=settings.SLACK_BOT_TOKEN,

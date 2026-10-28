@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from app.slack_connector.client import SlackError
 
 NOW = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
-ALLOWED = ["genel", "dev", "yonetim"]
+# Channel id lists of the sample workspace (MIG-B: the rule works with ids, not names).
+ALLOWED_IDS = ["C_GENEL", "C_DEV", "C_YON"]
+BLOCKED_IDS = ["C_IK"]
 
 
 def ts(hours_ago: int, seq: int = 100) -> str:
@@ -64,7 +66,10 @@ class FakeSlack:
 
 
 def sample_slack(**options) -> FakeSlack:
-    """genel, dev, yonetim (private) allowed; ik (private) and sales excluded. The bot is a member of all."""
+    """With ALLOWED_IDS / BLOCKED_IDS: genel, dev, yonetim (private) allowed; ik (private) blocked; sales excluded.
+
+    The bot is a member of all.
+    """
     return FakeSlack(
         channels=[
             channel("C_GENEL", "genel"),

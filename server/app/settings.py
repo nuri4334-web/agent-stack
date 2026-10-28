@@ -16,8 +16,11 @@ def _parse_list(value: str) -> list[str]:
 # Slack bot token (xoxb-...). Only the sync command uses it; it is never written to any output.
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 
-# Channels the assistant reads. A channel that is not on the list is not read (default: none).
+# Slack channel IDs (C...) the assistant reads. A channel that is not on the list is not read (default: none).
 ALLOWED_CHANNELS = _parse_list(os.getenv("ALLOWED_CHANNELS", ""))
+
+# Slack channel IDs that are never read (e.g. HR, finance). Always wins over ALLOWED_CHANNELS.
+BLOCKED_CHANNELS = _parse_list(os.getenv("BLOCKED_CHANNELS", ""))
 
 # Address(es) where the frontend runs; the browser may send requests to the server only from here.
 FRONTEND_ORIGINS = _parse_list(os.getenv("FRONTEND_ORIGINS", "http://localhost:5173"))
