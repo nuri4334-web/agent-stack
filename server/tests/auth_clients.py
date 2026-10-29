@@ -3,7 +3,9 @@
 The interface (`client_as`, `anonymous_client` in conftest.py) does not change after S2-01;
 S2-02/S2-03 only write these accounts to the database and turn on the login endpoint.
 """
+import re
 from dataclasses import dataclass
+from http.cookiejar import Cookie
 
 import pytest
 from fastapi.routing import APIRoute
@@ -15,6 +17,13 @@ SESSION_COOKIE = "agentstack_session"
 LOGIN_PATH = "/api/auth/login"
 # The session cookie is Secure: an http client would never send it back.
 BASE_URL = "https://testserver"
+# Python's cookie jar stores cookies of a host name without a dot under "<host>.local".
+COOKIE_DOMAIN = "testserver.local"
+
+# One message line of the data sent to the AI: "[#{channel} | {author} | {time}]: {text}".
+# This is the line format of gateway.ask_ai; if that format changes, this pattern changes too.
+# A message text with a line break continues on lines that do not match.
+MESSAGE_LINE = re.compile(r"^\[#(?P<channel>[\w-]+) \| [^|\n]+ \| [^\]\n]+\]: ", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -66,3 +75,27 @@ def make_client_as(target_app, name: str) -> TestClient:
     if SESSION_COOKIE not in client.cookies:
         pytest.fail(f"client_as('{name}'): login did not set the {SESSION_COOKIE} cookie")
     return client
+
+
+def set_session_cookie(client: TestClient, token: str) -> None:
+    """Puts a session cookie on the client by hand (e.g. a logged-out or made-up token); replaces the old one."""
+    client.cookies.jar.set_cookie(Cookie(
+        version=0, name=SESSION_COOKIE, value=token, port=None, port_specified=False,
+        domain=COOKIE_DOMAIN, domain_specified=False, domain_initial_dot=False,
+        path="/", path_specified=True, secure=True, expires=None, discard=True,
+        comment=None, comment_url=None, rest={"HttpOnly": None}, rfc2109=False,
+    ))
+
+
+def session_cookie(client: TestClient) -> str | None:
+    """The session cookie value the client holds, or None."""
+    return client.cookies.get(SESSION_COOKIE)
+
+
+def channels_sent_to_ai(sent: list[str]) -> list[set[str]]:
+    """For every AI call captured by sent_to_ai, the set of channel names in its message lines.
+
+    A question or message text that contains a line in the same format is counted too
+    (more channels, never fewer), so a "this channel was not sent" check cannot pass by mistake.
+    """
+    return [set(MESSAGE_LINE.findall(data)) for data in sent]

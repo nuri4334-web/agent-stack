@@ -1,12 +1,15 @@
 """S2-01: the shared identity test fixtures (client_as, anonymous_client, sent_to_ai) work as promised."""
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
 
 from app import ai, settings
 from app.database.schema import connect
 from app.main import app
 from tests.auth_clients import (
-    FIXTURE_ACCOUNTS, LOGIN_PATH, SESSION_COOKIE, TEST_PASSWORD, has_login_route, make_client_as,
+    FIXTURE_ACCOUNTS, LOGIN_PATH, MESSAGE_LINE, SESSION_COOKIE, TEST_PASSWORD,
+    channels_sent_to_ai, has_login_route, make_anonymous_client, make_client_as, session_cookie,
+    set_session_cookie,
 )
 
 
@@ -106,3 +109,79 @@ def test_fixture_accounts_match_seed_memberships():
     assert accounts["admin"].slack_user_id is None
     assert accounts["unlinked"].slack_user_id is None
     assert len(TEST_PASSWORD) >= 12
+
+
+def _ask(anonymous_client, question):
+    r = anonymous_client().post("/api/ask", json={"question": question})
+    assert r.status_code == 200
+    return r.json()
+
+
+def test_channels_sent_to_ai_one_channel(sent_to_ai, anonymous_client):
+    _ask(anonymous_client, "#dev'i özetle")
+    assert channels_sent_to_ai(sent_to_ai) == [{"dev"}]
+
+
+def test_channels_sent_to_ai_no_channel_name(sent_to_ai, anonymous_client):
+    _ask(anonymous_client, "geçen hafta neler oldu?")
+    assert channels_sent_to_ai(sent_to_ai) == [{"dev", "genel", "yonetim"}]
+
+
+def test_channels_sent_to_ai_empty_if_ai_not_called(sent_to_ai, anonymous_client):
+    assert _ask(anonymous_client, "#ik'i özetle")["status"] == "no_access"
+    assert channels_sent_to_ai(sent_to_ai) == []
+
+
+def _dev_texts():
+    connection = connect(settings.DATABASE_PATH)
+    try:
+        return [t for (t,) in connection.execute(
+            "SELECT m.clean_text FROM messages m JOIN channels c ON c.slack_id = m.channel_id WHERE c.name = 'dev'"
+        )]
+    finally:
+        connection.close()
+
+
+def test_message_line_pattern_matches_gateway_format(sent_to_ai, anonymous_client):
+    # Goes red if the line format of gateway.ask_ai changes without MESSAGE_LINE.
+    _ask(anonymous_client, "#dev'i özetle")
+    _, marker, block = sent_to_ai[0].partition("Relevant messages:\n")
+    assert marker
+    lines = block.split("\n")
+    texts = _dev_texts()
+    matching = [line for line in lines if MESSAGE_LINE.match(line)]
+    assert len(matching) == len(texts) == 27
+    # Every other line is the continuation of a message text with a line break.
+    assert len(lines) - len(matching) == sum(t.count("\n") for t in texts)
+
+
+def _cookie_echo_app():
+    small = FastAPI()
+
+    @small.get("/echo")
+    def echo(request: Request):
+        return {"cookie": request.headers.get("cookie")}
+
+    return small
+
+
+def test_set_session_cookie_is_sent_on_next_request():
+    c = make_anonymous_client(_cookie_echo_app())
+    assert session_cookie(c) is None
+    set_session_cookie(c, "TEST-made-up-token")
+    assert session_cookie(c) == "TEST-made-up-token"
+    assert c.get("/echo").json() == {"cookie": f"{SESSION_COOKIE}=TEST-made-up-token"}
+
+
+def test_set_session_cookie_replaces_login_cookie():
+    small = _app_with_login(200, set_cookie=True)
+    c = make_client_as(small, "ali")
+    set_session_cookie(c, "TEST-logged-out-token")
+    assert session_cookie(c) == "TEST-logged-out-token"
+    assert len(c.cookies.jar) == 1
+
+
+def test_set_session_cookie_is_secure():
+    c = TestClient(_cookie_echo_app())  # http://testserver
+    set_session_cookie(c, "TEST-made-up-token")
+    assert c.get("/echo").json() == {"cookie": None}
