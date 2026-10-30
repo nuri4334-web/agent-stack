@@ -4,14 +4,16 @@ Detailed description: docs/api-contract.md
 """
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AskRequest(BaseModel):
+    # An unknown field is an invalid request (422), so an old client never works silently.
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(min_length=1, max_length=2000, description="The user's question")
-    # TEMPORARY: removed in Stage 2; identity will be read from the session.
-    # If this field stays, it is the biggest authorization hole: Ali can change this field and become Nuri.
-    user: str = Field(min_length=1, max_length=100, description="TEMPORARY user name")
+    # DEPRECATED: removed in S2-03 (API contract v3). No decision may use it; identity comes only from the session.
+    user: str | None = Field(default=None, min_length=1, max_length=100, description="DEPRECATED, ignored")
 
 
 class SourceMessage(BaseModel):

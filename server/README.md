@@ -85,7 +85,7 @@ Inside `server/`, with the venv (in `.env`: `ALLOWED_CHANNELS` with the demo cha
 .venv/Scripts/python -m uvicorn app.main:app --reload
 ```
 
-http://localhost:8000/docs → `POST /api/ask` → Try it out → `{"question": "#dev'i özetle", "user": "ali"}`.
+http://localhost:8000/docs → `POST /api/ask` → Try it out → `{"question": "#dev'i özetle"}`.
 Data selection rules: [`docs/data-model.md`](../docs/data-model.md) ("Data selection (S1-05)").
 
 API contract: [`docs/api-contract.md`](../docs/api-contract.md)
