@@ -1,10 +1,10 @@
-# Data model — v2
+# Data model — v3
 
-The server's SQLite tables. Sprint 1 · S1-03. The schema itself: `server/app/database/schema.py`.
+The server's SQLite tables. Sprint 1 · S1-03; accounts and sessions: Sprint 2 · S2-02. The schema itself: `server/app/database/schema.py`.
 
 - The database is opened with Python's own `sqlite3` module; there is no extra package, ORM or migration tool.
 - The file location is the `DATABASE_PATH` setting in `.env` (a relative path is resolved from the repo root). Tests use an in-memory (`:memory:`) database or a seeded database in a temporary folder; they never touch the real file.
-- The schema version is kept in `PRAGMA user_version`; the current version is **3** (MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
+- The schema version is kept in `PRAGMA user_version`; the current version is **4** (S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
 - All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.37.0 is needed).
 - Time fields are ISO 8601 text (e.g. `2026-10-22T14:05:00+03:00`). The database does not fill in the time itself; the writing code always gives the time.
 - There is no cascading delete (`ON DELETE CASCADE`).
@@ -18,13 +18,17 @@ The authorization check in Stage 2 (`gateway.py` step 2) will use this chain. Th
 
 ## 1. `people`
 
-People who can log in to the system.
+People who can log in to the system (accounts). Accounts are created only with the account commands on the server (see "Accounts (S2-02)"); there is no default password.
 
 | Field | Description |
 |---|---|
 | `id` | The person's number id in the system. |
-| `display_name` | Name shown on the screen; cannot be empty. |
+| `username` | User name for login; unique, 3–32 characters: lower case `a-z`, digits, `.`, `_`, `-`, starting with a letter or digit. The commands (and the login in S2-03) convert it to lower case first, so `Ali` and `ali` are the same account. |
+| `display_name` | Name shown on the screen; cannot be empty. The API contract calls it `name`. |
 | `role` | `user` or `admin`; if not given, it is `user`, the one with the least permission. |
+| `password_hash` | The scrypt hash of the password, never the password: `scrypt$<n>$<r>$<p>$<salt hex>$<hash hex>` (random 16-byte salt per password; today n = 2^14, r = 8, p = 5, 32 bytes). The table accepts only values starting with `scrypt$`, so a plain password cannot be written by mistake. Empty (NULL): the account cannot log in with any password. |
+| `is_active` | 1 active (default), 0 inactive. An inactive account cannot log in and its sessions are ended. Accounts are never deleted. |
+| `created_at` | When the account was created. |
 
 ## 2. `linked_accounts`
 
@@ -107,8 +111,8 @@ Decisions of the gateway steps and of Slack sync runs. There is no message text,
 | `created_at` | Time of the event. |
 | `request_id` | The request id (lower case hex characters, at most 64); for Slack sync it is the id of that run. |
 | `person_id` | The person who made the request (`people.id`); empty (NULL) if identity could not be found or for Slack sync. |
-| `step` | One of the 7 gateway steps (`identity` … `presentation`) or `slack_sync`. |
-| `decision` | `passed` / `stopped` for a gateway step, `ok` / `error` for Slack sync. |
+| `step` | One of the 7 gateway steps (`identity` … `presentation`), `slack_sync`, `login` or `logout`. |
+| `decision` | `passed` / `stopped` for a gateway step, `login` and `logout`; `ok` / `error` for Slack sync. |
 | `reason_code` | Fixed code of the decision (only upper case letters, digits and `_`, at most 40 characters; e.g. `NOT_CHANNEL_MEMBER`); can be empty. |
 | `channel_id` | The channel the event is about (`channels.slack_id`); e.g. a channel that could not be fetched; can be empty. |
 | `message_count` | Number of messages handled in the step; for Slack sync, the number of new messages. |
@@ -140,6 +144,13 @@ Reason codes of Slack sync:
 
 Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; it only appears on the screen.
 
+**Login and logout (schema version 4; written from S2-03/S2-04):** `step = login` with `decision = passed`, or `stopped` with one of the reason codes below; `step = logout` with `decision = passed`. The user name and the password are never written; `person_id` is filled only when the person is known.
+
+| Code | Decision | Meaning |
+|---|---|---|
+| `INVALID_CREDENTIALS` | `stopped` | Login failed (no such user, inactive account, wrong password or no password set; all the same code). |
+| `TOO_MANY_ATTEMPTS` | `stopped` | Login limit reached. |
+
 ## 8. `ai_calls`
 
 Measurements of every call made to the AI. Prompt and answer text are not kept.
@@ -157,6 +168,41 @@ Measurements of every call made to the AI. Prompt and answer text are not kept.
 | `output_tokens` | Number of tokens received; empty (NULL) if unknown (e.g. on error). |
 
 **When it is written (S1-05):** Every time the gateway calls the AI, one row is written (`gateway.ask_ai`). If the provider returns an error, the row is written first (`TIMEOUT` → `timeout`, all other codes → `provider_error`, tokens empty, model name from the `GEMINI_MODEL` setting or `unknown`), then the error goes back unchanged as 502/504 in the API contract. For a request where the AI is not called (no access, no messages) no row is written. If the row cannot be written, the real answer or error does not change; only the request id and the error type are written to the server log.
+
+## 9. `sessions`
+
+Signed-in sessions (used from S2-03). The session token itself (the cookie value) is in no column: only its SHA-256 hash, so a stolen database gives no usable cookie.
+
+| Field | Description |
+|---|---|
+| `id` | Number id of the session row. |
+| `person_id` | The signed-in person (`people.id`). |
+| `token_hash` | SHA-256 of the session token, exactly 64 lower case hex characters; unique. |
+| `created_at` | When the session started (login). |
+| `expires_at` | When the session ends: at most 8 hours after `created_at` (absolute, no idle timeout). |
+| `last_seen_at` | Last request with this session. |
+
+Times are ISO 8601 text in UTC (`+00:00`), given by the writing code. `set-password` and `deactivate` delete all sessions of the person. Expired sessions are rejected and deleted by the login code (S2-03); this version has no clean-up job.
+
+## Accounts (S2-02)
+
+Code: `server/app/accounts/` (`rules.py` pure rules, `store.py` database, `commands.py` command line). Commands run inside `server/`, only on the server:
+
+```powershell
+.venv/Scripts/python -m app.accounts create --username ali --name "Ali Kaya" [--role admin]
+.venv/Scripts/python -m app.accounts set-password --username ali
+.venv/Scripts/python -m app.accounts link-slack --username ali --slack-id U0CA5HH3M1V
+.venv/Scripts/python -m app.accounts deactivate --username ali
+.venv/Scripts/python -m app.accounts activate --username ali
+.venv/Scripts/python -m app.accounts list
+```
+
+- The password is never a command line argument (it would stay in the shell history). `create` and `set-password` ask for it twice with hidden input. A password must be at least 12 and at most 128 characters (checked only when it is set, never at login). If it is too short or too long, or the two entries do not match, the command asks again; after 3 failed attempts it stops with exit code 2 and changes nothing.
+- `--role` is `user` (default) or `admin`.
+- `link-slack` links a Slack user id (`U…` or `W…`) with link method `admin`. The id must be in `slack_users` (load the seed or sync first) and must not be a bot. A Slack account linked to another person, or a person who already has a Slack account, gives an error (exit code 2); the table also blocks the first case.
+- `set-password` and `deactivate` end all sessions of the person. `deactivate` never deletes the account; `activate` makes it active again (opens no session).
+- `list` shows user name, name, role, active, whether a password is set and the Slack id; never the password hash.
+- Exit codes: 0 ok, 1 system error (the database cannot be opened, old schema version), 2 user error or wrong usage. No output ever contains a password, a password hash or a session token.
 
 ## Slack sync and seed data (S1-04)
 
@@ -215,6 +261,6 @@ Code: `server/app/data_selection/`. The gateway's step 3 (`gateway.data_selectio
 - If a channel's member list cannot be fetched, the channel's old memberships stay; how old they are can be seen from `updated_at`.
 - `sanitize()` does not change the text for now: until Stage 3, `clean_text` is actually the text in Slack.
 - The foreign key check works only on a connection opened with `connect()`; code that opens the database another way (`sqlite3.connect`) loses this check.
-- The value list of `audit_events.step` matches `gateway.STEPS` by hand; if a step is added to the gateway, the schema must be updated too (a test catches the difference).
+- The value list of `audit_events.step` (without `slack_sync`, `login`, `logout`) matches `gateway.STEPS` by hand; if a step is added to the gateway, the schema must be updated too (a test catches the difference).
 - Thread replies, attachments and files are out of scope.
 - A separate table for the masked text sent to the AI will be added in Stage 3.

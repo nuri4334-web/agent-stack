@@ -1,15 +1,18 @@
 """Test accounts and HTTP clients for the identity tests (S2-01; API contract v3).
 
 The interface (`client_as`, `anonymous_client` in conftest.py) does not change after S2-01;
-S2-02/S2-03 only write these accounts to the database and turn on the login endpoint.
+S2-02 writes these accounts to the database (`fixture_accounts`), S2-03 turns on the login endpoint.
 """
 import re
+import sqlite3
 from dataclasses import dataclass
 from http.cookiejar import Cookie
 
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+
+from app.accounts import store
 
 # Fake password for every test account: at least 12 characters, no secret pattern of the seed check.
 TEST_PASSWORD = "TEST-password-2026"
@@ -45,6 +48,20 @@ FIXTURE_ACCOUNTS: dict[str, FixtureAccount] = {
     # Deniz's Slack account, not a member of #yonetim: the admin role gives no channel access.
     "admin_linked": FixtureAccount("admin_linked", "Deniz Aydın", "admin", "U0CAKNQPNKD"),
 }
+
+
+def write_fixture_accounts(connection: sqlite3.Connection, password_hash: str, created_at: str) -> None:
+    """Writes the five test accounts with their Slack links, through the same store functions as the commands.
+
+    All share one hash of TEST_PASSWORD (scrypt runs once per test session; its parameters are never lowered).
+    """
+    for account in FIXTURE_ACCOUNTS.values():
+        person_id = store.create_account(
+            connection, username=account.username, name=account.name, role=account.role,
+            password_hash=password_hash, created_at=created_at,
+        )
+        if account.slack_user_id:
+            store.link_slack_account(connection, person_id, account.slack_user_id, linked_at=created_at)
 
 
 def has_login_route(target_app) -> bool:

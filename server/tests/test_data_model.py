@@ -3,12 +3,15 @@ import sqlite3
 import pytest
 
 from app import gateway
+from app.accounts.rules import new_session_token
 from app.database.schema import SCHEMA_VERSION, connect, create_tables
+from tests.auth_clients import TEST_PASSWORD
 
 TABLES = {
     "people", "linked_accounts", "slack_users", "channels",
-    "channel_memberships", "messages", "audit_events", "ai_calls",
+    "channel_memberships", "messages", "audit_events", "ai_calls", "sessions",
 }
+TOKEN_HASH = "ab" * 32
 TIME = "2026-10-22T14:05:00+03:00"
 TS = "1729500000.000100"
 
@@ -47,7 +50,15 @@ def _add_message(db, channel_id="C1", ts=TS, author_id="U1"):
 
 
 def _add_person(db, name="Ali", **fields):
-    return _insert(db, "people", {"display_name": name} | fields).lastrowid
+    row = {"username": name.lower(), "display_name": name, "created_at": TIME}
+    return _insert(db, "people", row | fields).lastrowid
+
+
+def _add_session(db, person_id, token_hash=TOKEN_HASH):
+    _insert(db, "sessions", {
+        "person_id": person_id, "token_hash": token_hash,
+        "created_at": TIME, "expires_at": TIME, "last_seen_at": TIME,
+    })
 
 
 def _link_account(db, person_id, source_account_id, source="slack", link_method="admin"):
@@ -81,7 +92,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 3
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -94,13 +105,13 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 4")
+    connection.execute("PRAGMA user_version = 5")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()
 
 
-@pytest.mark.parametrize("old_version", [1, 2])
+@pytest.mark.parametrize("old_version", [1, 2, 3])
 def test_older_schema_version_is_rejected(old_version):
     connection = connect(":memory:")
     connection.execute(f"PRAGMA user_version = {old_version}")
@@ -286,6 +297,57 @@ def test_source_and_link_method_limited(db):
         _link_account(db, ali, "U1", source="gitlab")
     with pytest.raises(sqlite3.IntegrityError):
         _link_account(db, ali, "U1", link_method="automatic")
+
+
+def test_people_defaults(db):
+    person_id = _add_person(db)
+    assert db.execute(
+        "SELECT role, is_active, password_hash FROM people WHERE id = ?", (person_id,)
+    ).fetchone() == ("user", 1, None)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_person(db, "Deniz", is_active=2)
+
+
+def test_username_unique_and_lower_case_in_table(db):
+    _add_person(db, "Ali")
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_person(db, "Ali")
+    for username in ["Ali2", "_ali", "ab", "a" * 33, "ali kaya", "ayşe"]:
+        with pytest.raises(sqlite3.IntegrityError):
+            _add_person(db, "Deniz", username=username)
+    _add_person(db, "Deniz", username="admin_linked")
+
+
+def test_password_hash_column_rejects_plain_text(db):
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_person(db, password_hash=TEST_PASSWORD)
+    _add_person(db, password_hash="scrypt$16384$8$5$" + "00" * 16 + "$" + "00" * 32)
+
+
+def test_sessions_have_no_token_column(db):
+    assert _columns(db, "sessions") == {
+        "id", "person_id", "token_hash", "created_at", "expires_at", "last_seen_at",
+    }
+
+
+def test_session_token_hash_format_checked(db):
+    ali = _add_person(db)
+    _add_session(db, ali)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_session(db, ali)  # same hash twice
+    for bad in [new_session_token(), "CD" * 32, "ab" * 31 + "a", "g" * 64]:
+        with pytest.raises(sqlite3.IntegrityError):
+            _add_session(db, ali, token_hash=bad)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_session(db, 999, token_hash="cd" * 32)
+
+
+def test_login_and_logout_steps_accepted(db):
+    _add_event(db, step="login", decision="passed")
+    _add_event(db, step="login", decision="stopped", reason_code="INVALID_CREDENTIALS")
+    _add_event(db, step="login", decision="stopped", reason_code="TOO_MANY_ATTEMPTS")
+    _add_event(db, step="logout", decision="passed")
+    assert db.execute("SELECT count(*) FROM audit_events").fetchone()[0] == 4
 
 
 def test_membership_cannot_be_written_with_unknown_user(db):
