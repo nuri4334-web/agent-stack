@@ -8,7 +8,8 @@ from app.data_selection import selection
 from app.main import app
 from app.slack_connector import seed
 from app.database.schema import connect
-from tests.auth_clients import make_anonymous_client, make_client_as
+from app.accounts.rules import hash_password
+from tests.auth_clients import TEST_PASSWORD, make_anonymous_client, make_client_as, write_fixture_accounts
 
 # Channel id lists for tests (independent of .env): genel, dev, yonetim of the demo seed; C_IK is the fake #ik.
 TEST_ALLOWED_CHANNELS = ["C0C8ATRM073", "C0C83M051QD", "C0CB44VUCF2"]
@@ -64,8 +65,27 @@ def _reset_login_attempts():
     yield
 
 
+@pytest.fixture(scope="session")
+def _fixture_password_hash():
+    """One real scrypt hash of TEST_PASSWORD per test session (scrypt is slow; its parameters are not lowered)."""
+    return hash_password(TEST_PASSWORD)
+
+
 @pytest.fixture
-def client_as():
+def fixture_accounts(_temporary_database, _fixture_password_hash):
+    """Writes the five test accounts (auth_clients.FIXTURE_ACCOUNTS) to the temporary database.
+
+    Not autouse: other tests see an empty people table.
+    """
+    connection = connect(_temporary_database)
+    try:
+        write_fixture_accounts(connection, _fixture_password_hash, "2026-10-24T00:00:00+00:00")
+    finally:
+        connection.close()
+
+
+@pytest.fixture
+def client_as(fixture_accounts):
     """client_as("ali") -> a new client signed in as that test account (names: auth_clients.FIXTURE_ACCOUNTS)."""
     return lambda name: make_client_as(app, name)
 

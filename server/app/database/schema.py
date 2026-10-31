@@ -1,6 +1,7 @@
 """Tables (S1-03): schema, connection and table creation.
 
 Messages have no raw text column; the audit log has no message text or free text.
+Passwords are kept only as a scrypt hash, session tokens only as a SHA-256 hash (S2-02).
 Details: docs/data-model.md
 """
 import sqlite3
@@ -9,7 +10,7 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Lowest SQLite version needed for STRICT tables.
 MIN_SQLITE_VERSION = (3, 37, 0)
@@ -17,10 +18,35 @@ MIN_SQLITE_VERSION = (3, 37, 0)
 # Time columns have no default: the caller always gives the time (ISO 8601 text).
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS people (
-    id            INTEGER PRIMARY KEY,
-    display_name  TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
-    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))
+    id             INTEGER PRIMARY KEY,
+    username       TEXT NOT NULL UNIQUE CHECK (
+                       length(username) BETWEEN 3 AND 32
+                       AND username GLOB '[a-z0-9]*'
+                       AND username NOT GLOB '*[^a-z0-9._-]*'
+                   ),
+    display_name   TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
+    role           TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    password_hash  TEXT CHECK (
+                       password_hash IS NULL OR (
+                           password_hash GLOB 'scrypt$*'
+                           AND length(password_hash) BETWEEN 20 AND 300)
+                   ),
+    is_active      INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at     TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id            INTEGER PRIMARY KEY,
+    person_id     INTEGER NOT NULL REFERENCES people (id),
+    token_hash    TEXT NOT NULL UNIQUE CHECK (
+                      length(token_hash) = 64
+                      AND token_hash NOT GLOB '*[^0-9a-f]*'
+                  ),
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS sessions_person ON sessions (person_id);
 
 CREATE TABLE IF NOT EXISTS linked_accounts (
     id                 INTEGER PRIMARY KEY,
@@ -82,7 +108,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     step              TEXT NOT NULL CHECK (step IN (
                           'identity', 'authorization', 'data_selection', 'sanitization',
                           'ask_ai', 'response_check', 'presentation',
-                          'slack_sync')),
+                          'slack_sync', 'login', 'logout')),
     decision          TEXT NOT NULL CHECK (decision IN ('passed', 'stopped', 'ok', 'error')),
     reason_code       TEXT CHECK (
                           reason_code IS NULL OR (

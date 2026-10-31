@@ -49,7 +49,7 @@ Until a task is merged, the server behaves as in the rows above it. Example: bef
 - Methods `GET`, `POST`; request header `Content-Type`. The response header `Retry-After` is readable by the browser (`expose_headers`).
 - The frontend sends every request with `fetch(url, { credentials: 'include', ... })`; POST bodies with `Content-Type: application/json`.
 - `http://localhost:5173` and `http://localhost:8000` are different origins (so CORS is needed) but the same *site* (the port does not count), so the `SameSite=Lax` cookie is sent. Use the same host name for both: `localhost` and `127.0.0.1` are different sites.
-- Proposal, to be confirmed with the frontend owner: CORS with the exact list (above). The alternative is a Vite proxy (same origin, no CORS), which works only in development.
+- Decided (frontend owner, 29 Oct 2026): CORS with the exact list above; no Vite proxy.
 
 ## 4. CSRF note
 
@@ -274,7 +274,7 @@ The frontend may show the `error.message` text to the user; messages never conta
 | `NO_MESSAGES` | data_selection | No message matched the question. |
 | `PROVIDER_ERROR`, `TIMEOUT` | ask_ai | The AI call failed. |
 
-The reason codes of Slack sync are in `docs/data-model.md`. Whether login events go to `audit_events` and with which `step` value is decided in S2-03/S2-04 (today the `step` column accepts only the 7 gateway steps and `slack_sync`).
+The reason codes of Slack sync are in `docs/data-model.md`. From schema version 4 (S2-02) the step column also accepts login and logout; the gateway and the login endpoint write these events from S2-03/S2-04.
 
 ## Version notes
 - **v1 (S1-02):** First version.

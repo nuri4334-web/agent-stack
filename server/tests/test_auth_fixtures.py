@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 from app import ai, settings
+from app.accounts.rules import verify_password
 from app.database.schema import connect
 from app.main import app
 from tests.auth_clients import (
@@ -109,6 +110,33 @@ def test_fixture_accounts_match_seed_memberships():
     assert accounts["admin"].slack_user_id is None
     assert accounts["unlinked"].slack_user_id is None
     assert len(TEST_PASSWORD) >= 12
+
+
+def test_fixture_accounts_written_to_database(fixture_accounts):
+    connection = connect(settings.DATABASE_PATH)
+    try:
+        rows = connection.execute(
+            "SELECT p.username, p.display_name, p.role, p.is_active, p.password_hash, a.source_account_id "
+            "FROM people p LEFT JOIN linked_accounts a ON a.person_id = p.id AND a.source = 'slack'"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert {r[0]: (r[1], r[2], r[5]) for r in rows} == {
+        a.username: (a.name, a.role, a.slack_user_id) for a in FIXTURE_ACCOUNTS.values()
+    }
+    assert all(r[3] == 1 for r in rows)
+    for r in rows:
+        assert TEST_PASSWORD not in r[4]
+        assert verify_password(r[4], TEST_PASSWORD)
+
+
+def test_people_empty_without_fixture_accounts():
+    connection = connect(settings.DATABASE_PATH)
+    try:
+        assert connection.execute("SELECT count(*) FROM people").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM linked_accounts").fetchone() == (0,)
+    finally:
+        connection.close()
 
 
 def _ask(anonymous_client, question):
