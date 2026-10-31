@@ -1,9 +1,16 @@
 import { useState } from 'react';
 import { API_URL, askQuestion } from './api';
 
-// Temporary user and role constants (will come from the session in Stage 2)
+// Temporary user and role constants (will come from the session in Stage 2 / S2-08)
 // If you set the role to 'admin', the Security Panel tab becomes visible
 const CURRENT_USER = { name: 'ali', role: 'user' }; // 'user' | 'admin'
+
+function formatLocalTime(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+  return date.toLocaleString();
+}
 
 export default function App() {
   // Switching between 3 pages: 'login' | 'chat' | 'panel'
@@ -15,32 +22,36 @@ export default function App() {
   const [sentQuestion, setSentQuestion] = useState('');
   const [typing, setTyping] = useState(false);
   const [answerData, setAnswerData] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorInfo, setErrorInfo] = useState(null);
 
   const sendQuestion = async (e) => {
     e.preventDefault();
-    if (!question.trim() || typing) return;
+    const trimmed = question.trim();
+    if (!trimmed || typing) return;
 
-    const currentQuestion = question;
-    setSentQuestion(currentQuestion);
+    setSentQuestion(trimmed);
     setQuestion('');
     setTyping(true);
     setAnswerData(null);
-    setErrorMessage('');
+    setErrorInfo(null);
 
     try {
-      const result = await askQuestion(currentQuestion, CURRENT_USER.name);
-      if (result.error) {
-        setErrorMessage(result.error.message || 'An error occurred.');
-      } else {
-        setAnswerData(result);
-      }
+      const result = await askQuestion(trimmed);
+      setAnswerData(result);
     } catch (err) {
-      setErrorMessage(err?.error?.message || 'Could not reach the server.');
+      setErrorInfo({
+        status: err?.status || 0,
+        code: err?.code || 'ERROR',
+        message: err?.message || 'Could not reach the server.',
+      });
     } finally {
       setTyping(false);
     }
   };
+
+  const isNoAccess = answerData?.status === 'no_access';
+  const sources = Array.isArray(answerData?.sources) ? answerData.sources : [];
+  const security = answerData?.security || { blocked: 0, masked: 0, suspicious: 0 };
 
   return (
     <div>
@@ -148,45 +159,81 @@ export default function App() {
                 </div>
               )}
 
-              {/* Error State */}
-              {errorMessage && !typing && (
+              {/* Error State (401, 422, 500, 502, 504 or Network Error) */}
+              {errorInfo && !typing && (
                 <div
                   className="meta-box"
+                  role="alert"
                   style={{
                     marginTop: '16px',
                     color: '#FCA5A5',
                     borderColor: '#EF4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)',
                   }}
                 >
-                  {errorMessage}
+                  <div>
+                    <strong>
+                      {errorInfo.status === 401 ? 'Authentication Required: ' : 'Error: '}
+                    </strong>
+                    {errorInfo.message}
+                  </div>
+                  {errorInfo.status === 401 && (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ marginTop: '10px', padding: '6px 12px', fontSize: '13px' }}
+                      onClick={() => setActivePage('login')}
+                    >
+                      Go to Login
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* Answer, Sources and Security Summary */}
               {answerData && !typing && (
                 <div style={{ marginTop: '20px' }}>
-                  <div
-                    style={{
-                      backgroundColor: '#0F172A',
-                      border: '1px solid #334155',
-                      padding: '16px',
-                      borderRadius: '8px',
-                      lineHeight: '1.5',
-                    }}
-                  >
-                    {/* Plain text display */}
-                    {answerData.answer}
-                  </div>
+                  {isNoAccess ? (
+                    <div
+                      className="meta-box"
+                      role="status"
+                      style={{
+                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                        border: '1px solid #F59E0B',
+                        color: '#FDE68A',
+                        padding: '16px',
+                        borderRadius: '8px',
+                        lineHeight: '1.5',
+                      }}
+                    >
+                      <strong>Access Restricted: </strong>
+                      {answerData.answer}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        backgroundColor: '#0F172A',
+                        border: '1px solid #334155',
+                        padding: '16px',
+                        borderRadius: '8px',
+                        lineHeight: '1.5',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {/* Plain text display */}
+                      {answerData.answer}
+                    </div>
+                  )}
 
                   <div className="meta-box">
                     <strong>Messages It Is Based On (Sources):</strong>
-                    {answerData.sources.length === 0 ? (
+                    {sources.length === 0 ? (
                       <div>No sources</div>
                     ) : (
                       <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
-                        {answerData.sources.map((s) => (
-                          <li key={`${s.channel}-${s.time}`}>
-                            #{s.channel} — {s.author}: &quot;{s.text}&quot;
+                        {sources.map((s) => (
+                          <li key={s.id}>
+                            #{s.channel} — {s.author} ({formatLocalTime(s.time)}): &quot;{s.text}&quot;
                           </li>
                         ))}
                       </ul>
@@ -195,9 +242,8 @@ export default function App() {
 
                   <div className="meta-box">
                     <strong>Security Summary: </strong>
-                    Blocked: {answerData.security.blocked} | Masked:{' '}
-                    {answerData.security.masked} | Suspicious:{' '}
-                    {answerData.security.suspicious}
+                    Blocked: {security.blocked} | Masked: {security.masked} | Suspicious:{' '}
+                    {security.suspicious}
                   </div>
                 </div>
               )}

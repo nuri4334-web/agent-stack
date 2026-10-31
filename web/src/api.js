@@ -1,24 +1,45 @@
 // The server address is read from a setting (the frontend has no secret keys)
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// S1-07: Fake chat flow (S1-09 will only switch this to fetch)
-export async function askQuestion(question, user = 'ali') {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        request_id: 'fake-request-001',
-        status: 'ok',
-        answer: `Fake answer for the question "${question}" (${user}): this week in #dev the login page and API connections were discussed.`,
-        sources: [
-          {
-            channel: 'dev',
-            author: 'Deniz',
-            time: '2026-10-22T14:05:00+03:00',
-            text: '@Ali you take the login page',
-          },
-        ],
-        security: { blocked: 0, masked: 0, suspicious: 0 },
-      });
-    }, 1000);
-  });
+export class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// S2-07: Connect chat screen to the server (API contract v3)
+export async function askQuestion(question) {
+  let response;
+  try {
+    response = await fetch(`${API_URL}/api/ask`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ question }),
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server. Check that the server is running.');
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const code = data?.error?.code || 'HTTP_ERROR';
+    const message =
+      response.status === 401
+        ? data?.error?.message || 'Please sign in to ask a question.'
+        : data?.error?.message || `Request failed (HTTP ${response.status}).`;
+    throw new ApiError(response.status, code, message);
+  }
+
+  return data;
 }
