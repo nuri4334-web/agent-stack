@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import ai, settings
+from .accounts.rules import SignedInPerson
 from .audit.log import write_ai_call
 from .schemas import AskResponse, SecuritySummary, SourceMessage
 from .data_selection.rules import MESSAGE_LIMIT
@@ -39,7 +40,7 @@ class RequestContext:
     """The information carried along a question's journey through the gateway."""
 
     question: str
-    user: str | None
+    person: SignedInPerson | None  # only from the server session
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "ok"
     selected_messages: list[SourceMessage] = field(default_factory=list)
@@ -54,9 +55,12 @@ class RequestContext:
     connection: sqlite3.Connection | None = None  # handle_question opens and closes it for every request
 
 
-# --- 1. Identity (Stage 2): who the user is is read from the session, not from the request field.
+# --- 1. Identity (S2-03): who the user is comes from the server session (the endpoint has already answered 401
+# without one). Defense in depth: without a person nothing runs, even if the endpoint check is removed.
 def identity(c: RequestContext) -> None:
-    pass
+    if c.person is None:
+        c.status = "no_access"
+        c.stopped = True
 
 
 # --- 2. Authorization (Stage 2): only the channels the user is a member of.
@@ -183,8 +187,10 @@ STEPS = [
 ]
 
 
-def handle_question(question: str, user: str | None, now: Callable[[], datetime] = _utc_now) -> AskResponse:
-    c = RequestContext(question=question, user=user, now=now)
+def handle_question(
+    question: str, person: SignedInPerson | None, now: Callable[[], datetime] = _utc_now,
+) -> AskResponse:
+    c = RequestContext(question=question, person=person, now=now)
     # Every request opens its own connection (FastAPI requests run in separate threads).
     c.connection = connect(settings.DATABASE_PATH)
     try:

@@ -8,14 +8,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import settings, gateway, ai
+from app.accounts import store
 from app.main import app
-from app.database.schema import connect
+from app.database.schema import connect, create_tables
+from tests.auth_clients import TEST_PERSON
 
 client = TestClient(app)
 
-ALI = "U0CA5HH3M1V"
+ALI ="U0CA5HH3M1V"
 FIXED_NOW = datetime(2026, 10, 25, 9, 30, tzinfo=timezone.utc)
 LINE_START = re.compile(r"^\[#([\w-]+) \| ", re.MULTILINE)
+
+
+@pytest.fixture(autouse=True)
+def _signed_in_client(client_as, monkeypatch):
+    """/api/ask needs a session (S2-03): every question in this file is asked by Ali."""
+    monkeypatch.setitem(globals(), "client", client_as("ali"))
 
 
 @pytest.fixture
@@ -54,8 +62,8 @@ def _call_rows():
     )
 
 
-def _ask(question, user="ali"):
-    return client.post("/api/ask", json={"question": question, "user": user})
+def _ask(question):
+    return client.post("/api/ask", json={"question": question})
 
 
 def _add_excluded_channel():
@@ -166,8 +174,19 @@ def test_old_name_settings_logged_once(sent, monkeypatch, caplog):
     ]
 
 
-def test_ai_not_called_if_no_messages(sent, monkeypatch, tmp_path, caplog):
+def test_ai_not_called_if_no_messages(sent, monkeypatch, tmp_path, caplog, client_as, _fixture_password_hash):
     monkeypatch.setattr(settings, "DATABASE_PATH", tmp_path / "empty.db")
+    # The session must be in the same database; this account needs no Slack data.
+    connection = connect(settings.DATABASE_PATH)
+    try:
+        create_tables(connection)
+        store.create_account(
+            connection, username="unlinked", name="Unlinked User", role="user",
+            password_hash=_fixture_password_hash, created_at=FIXED_NOW.isoformat(),
+        )
+    finally:
+        connection.close()
+    monkeypatch.setitem(globals(), "client", client_as("unlinked"))
     with caplog.at_level(logging.WARNING, logger="agentstack"):
         r = _ask("#dev'i özetle")
     assert r.status_code == 200
@@ -182,7 +201,7 @@ def test_ai_not_called_if_no_messages(sent, monkeypatch, tmp_path, caplog):
 
 def test_call_record_correct_and_has_no_text(sent):
     question = "#dev'i özetle"
-    answer = gateway.handle_question(question, "ali", now=lambda: FIXED_NOW)
+    answer = gateway.handle_question(question, TEST_PERSON, now=lambda: FIXED_NOW)
     rows = _call_rows()
     assert len(rows) == 1
     created_at, request_id, model, result, count, duration_ms, input_tokens, output_tokens = rows[0]
@@ -295,7 +314,7 @@ def test_red_test_preconditions():
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="Stage 2: no authorization layer")
 def test_ali_yonetim_question_ai_not_called(sent):
-    r = _ask("#yonetim'de neler konuşuldu?", user="ali")
+    r = _ask("#yonetim'de neler konuşuldu?")
     assert r.status_code == 200
     body = r.json()
     assert ai.fake_call_count() == 0

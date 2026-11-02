@@ -13,6 +13,16 @@ def _parse_list(value: str) -> list[str]:
     return [p.strip() for p in value.split(",") if p.strip()]
 
 
+def parse_bool_setting(name: str, value: str) -> bool:
+    """'true' or 'false' (spaces and case ignored). Anything else, also empty, stops the program: ValueError."""
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
 # Slack bot token (xoxb-...). Only the sync command uses it; it is never written to any output.
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 
@@ -24,6 +34,9 @@ BLOCKED_CHANNELS = _parse_list(os.getenv("BLOCKED_CHANNELS", ""))
 
 # Address(es) where the frontend runs; the browser may send requests to the server only from here.
 FRONTEND_ORIGINS = _parse_list(os.getenv("FRONTEND_ORIGINS", "http://localhost:5173"))
+
+# Secure attribute of the session cookie. false ONLY for local development over http://localhost.
+SESSION_COOKIE_SECURE = parse_bool_setting("SESSION_COOKIE_SECURE", os.getenv("SESSION_COOKIE_SECURE", "true"))
 
 # AI provider: 'gemini' or 'fake' (default: 'fake')
 AI_PROVIDER = os.getenv("AI_PROVIDER", "fake").strip().lower()

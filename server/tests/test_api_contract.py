@@ -1,4 +1,4 @@
-"""S2-01: API contract v3 changes in effect now (request body, CORS with credentials)."""
+"""S2-01: API contract v3 changes (request body, CORS with credentials); from S2-03 with a session."""
 import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 from app import ai, settings
 from app.main import ORIGIN_ERROR, app, cors_options
-
-client = TestClient(app)
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 OTHER_ORIGIN = "https://evil.example"
@@ -38,8 +36,8 @@ def _preflight(c, origin):
     })
 
 
-def test_ask_without_user_field_returns_200(sent_to_ai):
-    r = client.post("/api/ask", json={"question": "#dev'i özetle"})
+def test_ask_without_user_field_returns_200(sent_to_ai, client_as):
+    r = client_as("ali").post("/api/ask", json={"question": "#dev'i özetle"})
     assert r.status_code == 200
     body = r.json()
     assert set(body) == RESPONSE_FIELDS
@@ -47,16 +45,9 @@ def test_ask_without_user_field_returns_200(sent_to_ai):
     assert ai.fake_call_count() == 1
 
 
-def test_ask_with_user_field_still_200_until_s2_03(sent_to_ai):
-    # S2-03 removes the field; from then on this request gets 422.
-    r = client.post("/api/ask", json={"question": "#dev'i özetle", "user": "ali"})
-    assert r.status_code == 200
-    assert r.json()["status"] == "ok"
-
-
-@pytest.mark.parametrize("extra", [{"role": "admin"}, {"person_id": 1}])
-def test_ask_unknown_field_returns_422(sent_to_ai, extra):
-    r = client.post("/api/ask", json={"question": "#dev'i özetle", **extra})
+def test_ask_with_user_field_returns_422(sent_to_ai, client_as):
+    # S2-03 removed the field: identity comes only from the session.
+    r = client_as("ali").post("/api/ask", json={"question": "#dev'i özetle", "user": "ali"})
     assert r.status_code == 422
     assert r.json() == {
         "error": {"code": "INVALID_REQUEST", "message": "Invalid request format. See the API contract."}
@@ -65,8 +56,19 @@ def test_ask_unknown_field_returns_422(sent_to_ai, extra):
     assert sent_to_ai == []
 
 
-def test_ask_non_json_content_type_returns_422(sent_to_ai):
-    r = client.post(
+@pytest.mark.parametrize("extra", [{"role": "admin"}, {"person_id": 1}])
+def test_ask_unknown_field_returns_422(sent_to_ai, client_as, extra):
+    r = client_as("ali").post("/api/ask", json={"question": "#dev'i özetle", **extra})
+    assert r.status_code == 422
+    assert r.json() == {
+        "error": {"code": "INVALID_REQUEST", "message": "Invalid request format. See the API contract."}
+    }
+    assert ai.fake_call_count() == 0
+    assert sent_to_ai == []
+
+
+def test_ask_non_json_content_type_returns_422(sent_to_ai, client_as):
+    r = client_as("ali").post(
         "/api/ask", content='{"question": "#dev\'i özetle"}', headers={"Content-Type": "text/plain"},
     )
     assert r.status_code == 422

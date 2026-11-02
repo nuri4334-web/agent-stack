@@ -8,6 +8,7 @@ import hmac
 import re
 import secrets
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 # The same limits as the login request in the API contract (5. Login). Checked only when a password is set.
@@ -41,6 +42,20 @@ NAME_MAX_LENGTH = 100
 
 # A session lasts at most 8 hours from login (absolute; API contract 2. Session and cookie).
 SESSION_LIFETIME = timedelta(hours=8)
+
+# What new_session_token() produces: 32 random bytes as 43 URL-safe characters.
+SESSION_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}", re.ASCII)
+
+
+@dataclass(frozen=True)
+class SignedInPerson:
+    """Who a valid session belongs to. The only source of identity (no password hash, no token)."""
+
+    id: int
+    username: str
+    display_name: str
+    role: str
+    slack_user_id: str | None
 
 
 def _normalize_password(password: str) -> str:
@@ -139,6 +154,11 @@ def is_slack_user_id(value: object) -> bool:
 def new_session_token() -> str:
     """A new random session token (32 random bytes, URL-safe text). Only its hash is stored."""
     return secrets.token_urlsafe(32)
+
+
+def is_session_token(value: object) -> bool:
+    """Does value have the format of a session token. Anything else is not looked up in the database."""
+    return isinstance(value, str) and SESSION_TOKEN_PATTERN.fullmatch(value) is not None
 
 
 def hash_session_token(token: str) -> str:
