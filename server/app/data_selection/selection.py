@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from .. import settings
 from ..schemas import SourceMessage
 from ..database.rules import ALLOWED, channel_list_warnings, channel_status
-from .rules import MESSAGE_LIMIT, TargetResult, author_name, find_target_channels, resolve_slack_mentions
+from .rules import (
+    MESSAGE_LIMIT, TargetResult, author_name, find_target_channels, named_channel_id, resolve_slack_mentions,
+)
 
 log = logging.getLogger("agentstack")
 
@@ -19,6 +21,7 @@ _reported_warnings: set[str] = set()
 class Selection:
     result: TargetResult
     messages: list[SourceMessage] = field(default_factory=list)  # oldest to newest
+    channel_id: str | None = None  # the one channel the question names (audit log); never decides access
 
 
 def reset_reported_warnings() -> None:
@@ -58,7 +61,11 @@ def select_messages(
     result, targets = find_target_channels(question, channels)
     # The current settings are applied to the target list too, even if the target decision is wrong.
     targets = [t for t in targets if channel_status(t, allowed, blocked) == ALLOWED]
-    return Selection(result, _messages(connection, targets, channels, limit) if result == "ok" else [])
+    return Selection(
+        result,
+        _messages(connection, targets, channels, limit) if result == "ok" else [],
+        named_channel_id(question, channels),
+    )
 
 
 def _messages(connection, targets: list[str], channels, limit: int) -> list[SourceMessage]:

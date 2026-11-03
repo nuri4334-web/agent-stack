@@ -7,6 +7,16 @@ COUNT_COLUMNS = frozenset({
     "blocked_count", "masked_count", "suspicious_count",
 })
 
+# The fields of the admin event list (API contract 9), in the order of the query in list_events.
+EVENT_LIST_FIELDS = (
+    "created_at", "request_id", "person", "channel", "step", "decision", "reason_code",
+    "message_count", "blocked_count", "masked_count", "suspicious_count", "duration_ms",
+)
+
+
+class AuditWriteError(Exception):
+    """An event of a gateway step could not be written: the request stops (500), the error is never hidden."""
+
 
 def write_event(
     connection: sqlite3.Connection,
@@ -32,6 +42,20 @@ def write_event(
     columns = ", ".join(row)
     placeholders = ", ".join("?" * len(row))
     connection.execute(f"INSERT INTO audit_events ({columns}) VALUES ({placeholders})", tuple(row.values()))
+
+
+def list_events(connection: sqlite3.Connection, limit: int) -> list[dict[str, object]]:
+    """The newest `limit` events (id order: the order of writing), with the user name and the channel name."""
+    rows = connection.execute(
+        "SELECT e.created_at, e.request_id, p.username, c.name, e.step, e.decision, e.reason_code, "
+        "e.message_count, e.blocked_count, e.masked_count, e.suspicious_count, e.duration_ms "
+        "FROM audit_events e "
+        "LEFT JOIN people p ON p.id = e.person_id "
+        "LEFT JOIN channels c ON c.slack_id = e.channel_id "
+        "ORDER BY e.id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(zip(EVENT_LIST_FIELDS, row)) for row in rows]
 
 
 def write_ai_call(

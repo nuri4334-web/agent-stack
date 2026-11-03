@@ -32,8 +32,8 @@ class LoginLimiter:
     def claim(self, username: str, ip: str, now: datetime) -> Claim:
         """Over a limit: the seconds to wait (the attempt is not counted). Otherwise reserves one failed attempt."""
         with self._lock:
-            _forget_old(self._by_username, now)
-            _forget_old(self._by_ip, now)
+            forget_old(self._by_username, now)
+            forget_old(self._by_ip, now)
             waits = [
                 _seconds_until_free(attempts, limit, now)
                 for attempts, limit in (
@@ -66,10 +66,10 @@ class LoginLimiter:
             self._by_ip.clear()
 
 
-def _forget_old(counters: dict[str, deque[datetime]], now: datetime) -> None:
+def forget_old(counters: dict[str, deque[datetime]], now: datetime, window: timedelta = WINDOW) -> None:
     for key in list(counters):
         attempts = counters[key]
-        while attempts and attempts[0] + WINDOW <= now:
+        while attempts and attempts[0] + window <= now:
             attempts.popleft()
         if not attempts:
             del counters[key]

@@ -60,6 +60,25 @@ class AskResponse(BaseModel):
     security: SecuritySummary = SecuritySummary()
 
 
+class AuditEventItem(BaseModel):
+    created_at: str  # ISO 8601 in UTC
+    request_id: str
+    person: str | None  # the user name
+    channel: str | None  # the channel name
+    step: str
+    decision: str
+    reason_code: str | None
+    message_count: int
+    blocked_count: int
+    masked_count: int
+    suspicious_count: int
+    duration_ms: float
+
+
+class AuditEventList(BaseModel):
+    events: list[AuditEventItem]
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str

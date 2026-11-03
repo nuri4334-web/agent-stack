@@ -132,7 +132,6 @@ def test_logged_out_cookie_cannot_be_replayed(client_as, sent_to_ai):
 
 # --- Admin-only endpoint ----------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_non_admin_cannot_read_event_list(client_as):
     """Ali, who is not an admin, asks for the security event list: 403 FORBIDDEN."""
     r = client_as("ali").get(EVENTS)
