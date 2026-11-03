@@ -8,6 +8,7 @@ from app.data_selection import selection
 from app.main import app
 from app.slack_connector import seed
 from app.database.schema import connect
+from app.accounts.login_limit import reset_login_attempts
 from app.accounts.rules import hash_password
 from tests.auth_clients import TEST_PASSWORD, make_anonymous_client, make_client_as, write_fixture_accounts
 
@@ -61,8 +62,16 @@ def _default_fake_provider(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_login_attempts():
-    """S2-03 resets the login attempt counter here before every test; there is no counter yet."""
+    """The login attempt counter is in memory: every test starts with an empty one."""
+    reset_login_attempts()
     yield
+    reset_login_attempts()
+
+
+@pytest.fixture(autouse=True)
+def _session_cookie_secure(monkeypatch):
+    """In every test the session cookie is Secure, even if the developer's .env says SESSION_COOKIE_SECURE=false."""
+    monkeypatch.setattr(settings, "SESSION_COOKIE_SECURE", True)
 
 
 @pytest.fixture(scope="session")

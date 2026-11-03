@@ -89,7 +89,6 @@ def test_blocklisted_channel_is_always_refused(client_as, sent_to_ai):
 
 # --- Identity ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_user_field_cannot_impersonate_ayse(client_as, sent_to_ai):
     """Ali adds the old "user": "ayse" field to act as Ayşe: 422 and the AI is never called."""
     r = ask(client_as("ali"), "#yonetim'de neler konuşuldu?", user="ayse")
@@ -99,7 +98,6 @@ def test_user_field_cannot_impersonate_ayse(client_as, sent_to_ai):
     assert sent_to_ai == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_request_without_session_is_rejected(anonymous_client, sent_to_ai):
     """A request with no session asks about #dev: 401 UNAUTHENTICATED and the AI is never called."""
     r = ask(anonymous_client(), "#dev'i özetle")
@@ -109,7 +107,6 @@ def test_request_without_session_is_rejected(anonymous_client, sent_to_ai):
     assert sent_to_ai == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_forged_session_cookie_is_rejected(anonymous_client, sent_to_ai):
     """An attacker sends a made-up session cookie: 401 and the AI is never called."""
     client = anonymous_client()
@@ -120,7 +117,6 @@ def test_forged_session_cookie_is_rejected(anonymous_client, sent_to_ai):
     assert sent_to_ai == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_logged_out_cookie_cannot_be_replayed(client_as, sent_to_ai):
     """Ali logs out and replays his old session cookie: 401, the server deleted the session."""
     client = client_as("ali")
@@ -146,7 +142,6 @@ def test_non_admin_cannot_read_event_list(client_as):
 
 # --- Brute force ------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_wrong_passwords_lock_the_username(anonymous_client, fixture_accounts):
     """An attacker tries 5 wrong passwords for "ali": the 6th attempt gets 429, even with the right password."""
     client = anonymous_client()

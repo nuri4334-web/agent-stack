@@ -4,16 +4,39 @@ Detailed description: docs/api-contract.md
 """
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AskRequest(BaseModel):
     # An unknown field is an invalid request (422), so an old client never works silently.
+    # Identity comes only from the session: a "user" field gets 422 too.
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000, description="The user's question")
-    # DEPRECATED: removed in S2-03 (API contract v3). No decision may use it; identity comes only from the session.
-    user: str | None = Field(default=None, min_length=1, max_length=100, description="DEPRECATED, ignored")
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64, description="The account's user name")
+    password: str = Field(min_length=1, max_length=128, description="The password")
+
+    @field_validator("username", "password")
+    @classmethod
+    def _must_be_encodable(cls, value: str) -> str:
+        # JSON can carry a lone surrogate ("\ud800"); such a text cannot be hashed. The error never contains the value.
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("Text cannot be encoded.") from None
+        return value
+
+
+class PersonResponse(BaseModel):
+    username: str
+    name: str
+    role: Literal["user", "admin"]
+    slack_linked: bool
 
 
 class SourceMessage(BaseModel):

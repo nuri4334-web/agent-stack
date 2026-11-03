@@ -31,10 +31,11 @@ def _app_with_login(status_code, set_cookie):
 
 
 @pytest.mark.parametrize("name", sorted(FIXTURE_ACCOUNTS))
-def test_client_as_every_account_https_client(client_as, name):
+def test_client_as_every_account_signed_in_over_https(client_as, name):
     c = client_as(name)
     assert str(c.base_url) == "https://testserver"
-    assert not c.cookies  # no login endpoint yet (S2-03)
+    assert session_cookie(c)
+    assert c.get("/api/auth/me").json()["username"] == name
 
 
 def test_client_as_unknown_name_fails(client_as):
@@ -44,9 +45,15 @@ def test_client_as_unknown_name_fails(client_as):
     assert "admin_linked" in str(error.value)
 
 
-def test_client_as_without_login_route_is_cookieless(client_as):
-    assert not has_login_route(app)
-    assert not client_as("ali").cookies
+def test_client_as_uses_the_real_login_route(client_as):
+    assert has_login_route(app)
+    assert session_cookie(client_as("ali"))
+
+
+def test_client_as_fails_without_login_route():
+    with pytest.raises(pytest.fail.Exception) as error:
+        make_client_as(FastAPI(), "ali")
+    assert "login returned 404" in str(error.value)
 
 
 def test_client_as_fails_if_login_route_rejects():
@@ -77,10 +84,10 @@ def test_anonymous_client_https_and_cookieless(anonymous_client):
     assert c is not anonymous_client()
 
 
-def test_sent_to_ai_captures_and_counter_starts_at_zero(sent_to_ai, anonymous_client):
+def test_sent_to_ai_captures_and_counter_starts_at_zero(sent_to_ai, client_as):
     assert ai.fake_call_count() == 0
     assert sent_to_ai == []
-    r = anonymous_client().post("/api/ask", json={"question": "#dev'i özetle"})
+    r = client_as("ali").post("/api/ask", json={"question": "#dev'i özetle"})
     assert r.status_code == 200
     assert ai.fake_call_count() == 1
     assert len(sent_to_ai) == 1
@@ -139,24 +146,24 @@ def test_people_empty_without_fixture_accounts():
         connection.close()
 
 
-def _ask(anonymous_client, question):
-    r = anonymous_client().post("/api/ask", json={"question": question})
+def _ask(client_as, question):
+    r = client_as("ali").post("/api/ask", json={"question": question})
     assert r.status_code == 200
     return r.json()
 
 
-def test_channels_sent_to_ai_one_channel(sent_to_ai, anonymous_client):
-    _ask(anonymous_client, "#dev'i özetle")
+def test_channels_sent_to_ai_one_channel(sent_to_ai, client_as):
+    _ask(client_as, "#dev'i özetle")
     assert channels_sent_to_ai(sent_to_ai) == [{"dev"}]
 
 
-def test_channels_sent_to_ai_no_channel_name(sent_to_ai, anonymous_client):
-    _ask(anonymous_client, "geçen hafta neler oldu?")
+def test_channels_sent_to_ai_no_channel_name(sent_to_ai, client_as):
+    _ask(client_as, "geçen hafta neler oldu?")
     assert channels_sent_to_ai(sent_to_ai) == [{"dev", "genel", "yonetim"}]
 
 
-def test_channels_sent_to_ai_empty_if_ai_not_called(sent_to_ai, anonymous_client):
-    assert _ask(anonymous_client, "#ik'i özetle")["status"] == "no_access"
+def test_channels_sent_to_ai_empty_if_ai_not_called(sent_to_ai, client_as):
+    assert _ask(client_as, "#ik'i özetle")["status"] == "no_access"
     assert channels_sent_to_ai(sent_to_ai) == []
 
 
@@ -170,9 +177,9 @@ def _dev_texts():
         connection.close()
 
 
-def test_message_line_pattern_matches_gateway_format(sent_to_ai, anonymous_client):
+def test_message_line_pattern_matches_gateway_format(sent_to_ai, client_as):
     # Goes red if the line format of gateway.ask_ai changes without MESSAGE_LINE.
-    _ask(anonymous_client, "#dev'i özetle")
+    _ask(client_as, "#dev'i özetle")
     _, marker, block = sent_to_ai[0].partition("Relevant messages:\n")
     assert marker
     lines = block.split("\n")
