@@ -1,7 +1,7 @@
 """Test accounts and HTTP clients for the identity tests (S2-01; API contract v3).
 
 The interface (`client_as`, `anonymous_client` in conftest.py) does not change after S2-01;
-S2-02 writes these accounts to the database (`fixture_accounts`), S2-03 turns on the login endpoint.
+S2-02 writes these accounts to the database (`fixture_accounts`), `client_as` signs in through the login endpoint (S2-03).
 """
 import re
 import sqlite3
@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from app.accounts import store
+from app.accounts.rules import SignedInPerson
 
 # Fake password for every test account: at least 12 characters, no secret pattern of the seed check.
 TEST_PASSWORD = "TEST-password-2026"
@@ -49,6 +50,9 @@ FIXTURE_ACCOUNTS: dict[str, FixtureAccount] = {
     "admin_linked": FixtureAccount("admin_linked", "Deniz Aydın", "admin", "U0CAKNQPNKD"),
 }
 
+# For tests that call gateway.handle_question directly, without an HTTP request.
+TEST_PERSON = SignedInPerson(id=1, username="ali", display_name="Ali Kaya", role="user", slack_user_id="U0CA5HH3M1V")
+
 
 def write_fixture_accounts(connection: sqlite3.Connection, password_hash: str, created_at: str) -> None:
     """Writes the five test accounts with their Slack links, through the same store functions as the commands.
@@ -78,14 +82,11 @@ def make_anonymous_client(target_app) -> TestClient:
 def make_client_as(target_app, name: str) -> TestClient:
     """A client signed in as a test account.
 
-    Until the login endpoint exists (S2-03) it returns a client without a cookie, so attack tests stay xfail.
-    Once the endpoint exists, a failed login is a test error: no test may pass with a cookieless client by mistake.
+    A failed login is a test error: no test may pass with a cookieless client by mistake.
     """
     if name not in FIXTURE_ACCOUNTS:
         pytest.fail(f"client_as: unknown test account '{name}'; use one of: {', '.join(FIXTURE_ACCOUNTS)}")
     client = make_anonymous_client(target_app)
-    if not has_login_route(target_app):
-        return client
     r = client.post(LOGIN_PATH, json={"username": name, "password": TEST_PASSWORD})
     if r.status_code != 200:
         pytest.fail(f"client_as('{name}'): login returned {r.status_code}, expected 200")

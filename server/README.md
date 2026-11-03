@@ -6,7 +6,7 @@ Python (FastAPI) server. All logic is here; the frontend has no keys.
 
 | Folder / file | What it does | Owner |
 |---|---|---|
-| `main.py` | Server entry point: endpoints (`/health`, `/api/ask`) and error format. | Nuri |
+| `main.py` | Server entry point: endpoints (`/health`, `/api/auth/*`, `/api/ask`) and error format. | Nuri |
 | `gateway.py` | Security gateway (main flow). Every question passes through seven steps in order. | Nuri |
 | `schemas.py` | The API contract in code: request and response formats. | Nuri |
 | `settings.py` | Reads settings from the `.env` file. | Nuri |
@@ -15,7 +15,7 @@ Python (FastAPI) server. All logic is here; the frontend has no keys.
 | `filters/` | Secret and name masking, hidden instruction detection. | Musa |
 | `audit/` | The decision and duration of every step; contains no message text. | Nuri |
 | `database/` | SQLite tables. | Nuri |
-| `accounts/` | Accounts: password and session token rules, account commands (server only). | Nuri |
+| `accounts/` | Accounts: password and session token rules, login flow, attempt limit, sessions, account commands (server only). | Nuri |
 | `data_selection/` | Selects the messages that go to the AI for a question. | Nuri |
 
 ## Single path rule
@@ -99,10 +99,31 @@ Other commands: `set-password --username ali` (ends the account's sessions), `de
 A Slack account can be linked to one person only. Exit codes: 0 ok, 1 system error, 2 user error.
 Details: [`docs/data-model.md`](../docs/data-model.md) ("Accounts (S2-02)").
 
+## Sign-in and local development
+
+Identity comes only from the server session: `POST /api/auth/login` sets the `agentstack_session` cookie,
+`POST /api/auth/logout` ends it, `GET /api/auth/me` tells who is signed in. `POST /api/ask` without a session gets 401.
+
+- `SESSION_COOKIE_SECURE` in `.env` is `true` by default. While you try the screen on `http://localhost`, write
+  `SESSION_COOKIE_SECURE=false` in `.env`; otherwise the browser does not send the cookie back: the login looks
+  successful, but the next requests get 401. Use `false` **only** for local development over `http://localhost`, never
+  in a shared deployment. Any value other than `true` or `false` stops the server at start.
+- Use the same host name for the frontend and the server (`localhost` for both, or `127.0.0.1` for both).
+- **Run one server process.** The login attempt limit (at most 5 failed attempts per user name and at most 30 per IP
+  address in 15 minutes) is kept in memory: a restart resets it, and with several processes (`uvicorn --workers N`)
+  every process has its own counter, so the real limit is higher.
+- The IP address is the address of the connection. Proxy headers such as `X-Forwarded-For` are not read: behind a proxy
+  all requests count as one IP address.
+- All stored password hashes use the same scrypt parameters today. A hash with a different `n` would make "wrong
+  password" and "no such account" take different times; if the parameters ever change, re-check this.
+
+Try it in `http://localhost:8000/docs`: `POST /api/auth/login` → Try it out → your user name and password; the browser
+keeps the cookie for the next requests.
+
 ## End-to-end try
 
 Inside `server/`, with the venv (in `.env`: `ALLOWED_CHANNELS` with the demo channel IDs of genel, dev and yonetim,
-`BLOCKED_CHANNELS` with the ID of ik, `AI_PROVIDER=fake`):
+`BLOCKED_CHANNELS` with the ID of ik, `AI_PROVIDER=fake`, `SESSION_COOKIE_SECURE=false`; the demo accounts from "Accounts"):
 
 ```powershell
 # If the database does not exist or is empty
@@ -110,7 +131,7 @@ Inside `server/`, with the venv (in `.env`: `ALLOWED_CHANNELS` with the demo cha
 .venv/Scripts/python -m uvicorn app.main:app --reload
 ```
 
-http://localhost:8000/docs → `POST /api/ask` → Try it out → `{"question": "#dev'i özetle"}`.
+http://localhost:8000/docs → `POST /api/auth/login` → Try it out → sign in; then `POST /api/ask` → Try it out → `{"question": "#dev'i özetle"}`.
 Data selection rules: [`docs/data-model.md`](../docs/data-model.md) ("Data selection (S1-05)").
 
 API contract: [`docs/api-contract.md`](../docs/api-contract.md)

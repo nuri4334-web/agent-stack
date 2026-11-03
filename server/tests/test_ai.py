@@ -1,13 +1,10 @@
 """S1-08: AI connection v1 tests."""
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from app import settings, gateway, ai
-from app.main import app
 from app.ai import gemini
-
-client = TestClient(app)
+from tests.auth_clients import TEST_PERSON
 
 
 def test_fake_provider_fixed_answer_and_counter(monkeypatch):
@@ -43,7 +40,7 @@ def test_stopped_request_does_not_increase_fake_counter(monkeypatch):
             ("ask_ai", gateway.ask_ai),
         ],
     )
-    answer = gateway.handle_question("yonetim ne konuştu?", "ali")
+    answer = gateway.handle_question("yonetim ne konuştu?", TEST_PERSON)
     assert answer.status == "no_access"
     assert ai.fake_call_count() == 0
 
@@ -100,7 +97,8 @@ def test_gemini_puts_instruction_and_data_in_separate_fields_and_gives_no_tools(
     assert "tools" not in body
 
 
-def test_gemini_does_not_leak_key_on_error_and_timeout(monkeypatch):
+def test_gemini_does_not_leak_key_on_error_and_timeout(monkeypatch, client_as):
+    client = client_as("ali")
     secret = "AIzaSySECRET_TEST_KEY_999"
     monkeypatch.setattr(settings, "AI_PROVIDER", "gemini")
     monkeypatch.setattr(settings, "GEMINI_API_KEY", secret)
@@ -128,7 +126,7 @@ def test_gemini_does_not_leak_key_on_error_and_timeout(monkeypatch):
     assert secret not in str(exc_info.value)
 
     # API contract: on timeout the server must return 504 and TIMEOUT
-    r_504 = client.post("/api/ask", json={"question": "test question", "user": "ali"})
+    r_504 = client.post("/api/ask", json={"question": "test question"})
     assert r_504.status_code == 504
     body_504 = r_504.json()
     assert body_504["error"]["code"] == "TIMEOUT"
@@ -142,7 +140,7 @@ def test_gemini_does_not_leak_key_on_error_and_timeout(monkeypatch):
             return ErrorResponse()
 
     monkeypatch.setattr(httpx, "Client", ServerErrorClient)
-    r_502 = client.post("/api/ask", json={"question": "test question", "user": "ali"})
+    r_502 = client.post("/api/ask", json={"question": "test question"})
     assert r_502.status_code == 502
     body_502 = r_502.json()
     assert body_502["error"]["code"] == "PROVIDER_ERROR"
