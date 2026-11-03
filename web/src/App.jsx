@@ -1,9 +1,5 @@
-import { useState } from 'react';
-import { API_URL, askQuestion } from './api';
-
-// Temporary user and role constants (will come from the session in Stage 2 / S2-08)
-// If you set the role to 'admin', the Security Panel tab becomes visible
-const CURRENT_USER = { name: 'ali', role: 'user' }; // 'user' | 'admin'
+import { useEffect, useState } from 'react';
+import { API_URL, askQuestion, getCurrentUser, login, logout } from './api';
 
 function formatLocalTime(isoString) {
   if (!isoString) return '';
@@ -13,9 +9,20 @@ function formatLocalTime(isoString) {
 }
 
 export default function App() {
-  // Switching between 3 pages: 'login' | 'chat' | 'panel'
-  const [activePage, setActivePage] = useState('chat');
+  // Session state (kept only in React memory, never in localStorage/sessionStorage)
+  const [currentUser, setCurrentUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // Page navigation: 'login' | 'chat' | 'panel'
+  const [activePage, setActivePage] = useState('login');
   const [profileOpen, setProfileOpen] = useState(false);
+
+  // Login form state
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [lockoutSecondsLeft, setLockoutSecondsLeft] = useState(0);
 
   // Chat flow state
   const [question, setQuestion] = useState('');
@@ -23,6 +30,99 @@ export default function App() {
   const [typing, setTyping] = useState(false);
   const [answerData, setAnswerData] = useState(null);
   const [errorInfo, setErrorInfo] = useState(null);
+
+  // Check active session on startup
+  useEffect(() => {
+    let cancelled = false;
+    async function checkSession() {
+      try {
+        const user = await getCurrentUser();
+        if (cancelled) return;
+        if (user) {
+          setCurrentUser(user);
+          setActivePage('chat');
+        } else {
+          setCurrentUser(null);
+          setActivePage('login');
+        }
+      } catch {
+        if (!cancelled) {
+          setCurrentUser(null);
+          setActivePage('login');
+        }
+      } finally {
+        if (!cancelled) {
+          setCheckingSession(false);
+        }
+      }
+    }
+    checkSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Countdown timer when login is locked (HTTP 429)
+  useEffect(() => {
+    if (lockoutSecondsLeft <= 0) return undefined;
+    const timer = setInterval(() => {
+      setLockoutSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setLoginError('');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lockoutSecondsLeft]);
+
+  const isLockedOut = lockoutSecondsLeft > 0;
+  const lockoutMinutes = Math.max(1, Math.ceil(lockoutSecondsLeft / 60));
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    const trimmedUser = username.trim();
+    const submittedPassword = password;
+    // Always clear the password input immediately on submit
+    setPassword('');
+
+    if (!trimmedUser || !submittedPassword || loginBusy || isLockedOut) return;
+
+    setLoginBusy(true);
+    setLoginError('');
+
+    try {
+      const user = await login(trimmedUser, submittedPassword);
+      setCurrentUser(user);
+      setUsername('');
+      setSentQuestion('');
+      setAnswerData(null);
+      setErrorInfo(null);
+      setLockoutSecondsLeft(0);
+      setActivePage('chat');
+    } catch (err) {
+      if (err?.status === 429) {
+        const seconds = err.retryAfterSeconds || 300;
+        setLockoutSecondsLeft(seconds);
+      }
+      setLoginError(err?.message || 'Invalid username or password.');
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setProfileOpen(false);
+    await logout();
+    setCurrentUser(null);
+    setQuestion('');
+    setSentQuestion('');
+    setAnswerData(null);
+    setErrorInfo(null);
+    setLoginError('');
+    setActivePage('login');
+  };
 
   const sendQuestion = async (e) => {
     e.preventDefault();
@@ -39,6 +139,12 @@ export default function App() {
       const result = await askQuestion(trimmed);
       setAnswerData(result);
     } catch (err) {
+      if (err?.status === 401) {
+        setCurrentUser(null);
+        setLoginError('Please sign in.');
+        setActivePage('login');
+        return;
+      }
       setErrorInfo({
         status: err?.status || 0,
         code: err?.code || 'ERROR',
@@ -52,83 +158,179 @@ export default function App() {
   const isNoAccess = answerData?.status === 'no_access';
   const sources = Array.isArray(answerData?.sources) ? answerData.sources : [];
   const security = answerData?.security || { blocked: 0, masked: 0, suspicious: 0 };
+  const displayName = currentUser?.name || currentUser?.username || '';
+  const avatarText = (displayName || 'U').slice(0, 2).toUpperCase();
 
   return (
     <div>
-      {/* Top Menu: Switching Between 3 Pages */}
+      {/* Top Bar */}
       <header className="navbar">
         <div className="brand">
           ASP <span>Agent Stack Project</span>
         </div>
 
         <nav className="nav-links">
-          <button
-            className={`nav-link ${activePage === 'login' ? 'active' : ''}`}
-            onClick={() => setActivePage('login')}
-          >
-            Login
-          </button>
-          <button
-            className={`nav-link ${activePage === 'chat' ? 'active' : ''}`}
-            onClick={() => setActivePage('chat')}
-          >
-            Chat
-          </button>
+          {currentUser ? (
+            <>
+              <button
+                className={`nav-link ${activePage === 'chat' ? 'active' : ''}`}
+                onClick={() => setActivePage('chat')}
+              >
+                Chat
+              </button>
 
-          {/* The Security Panel is visible only to the admin role */}
-          {CURRENT_USER.role === 'admin' && (
+              {/* The Security Panel is visible only to the admin role */}
+              {currentUser.role === 'admin' && (
+                <button
+                  className={`nav-link ${activePage === 'panel' ? 'active' : ''}`}
+                  onClick={() => setActivePage('panel')}
+                >
+                  Security Panel
+                </button>
+              )}
+
+              {/* Profile & Sign Out Dropdown */}
+              <div className="profile-wrapper">
+                <button
+                  className="profile-pill"
+                  onClick={() => setProfileOpen(!profileOpen)}
+                >
+                  <div className="avatar">{avatarText}</div>
+                  <div style={{ textAlign: 'left', fontSize: '12px' }}>
+                    <div style={{ fontWeight: 600 }}>{displayName}</div>
+                    <div style={{ color: '#94A3B8', fontSize: '11px' }}>
+                      {currentUser.role === 'admin' ? 'Admin' : 'User'}
+                    </div>
+                  </div>
+                  <div className="status-dot" />
+                </button>
+
+                {profileOpen && (
+                  <div className="popover">
+                    <div style={{ fontSize: '12px', color: '#94A3B8', marginBottom: '6px' }}>
+                      Signed in as <strong>{currentUser.username}</strong>
+                    </div>
+                    <button className="popover-btn" onClick={handleLogout}>
+                      Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="nav-link"
+                onClick={handleLogout}
+              >
+                Logout
+              </button>
+            </>
+          ) : (
             <button
-              className={`nav-link ${activePage === 'panel' ? 'active' : ''}`}
-              onClick={() => setActivePage('panel')}
+              className="nav-link active"
+              onClick={() => setActivePage('login')}
             >
-              Security Panel
+              Login
             </button>
           )}
-
-          {/* Profile & Linked Accounts Dropdown */}
-          <div className="profile-wrapper">
-            <button
-              className="profile-pill"
-              onClick={() => setProfileOpen(!profileOpen)}
-            >
-              <div className="avatar">
-                {CURRENT_USER.name.slice(0, 2).toUpperCase()}
-              </div>
-              <div style={{ textAlign: 'left', fontSize: '12px' }}>
-                <div style={{ fontWeight: 600 }}>{CURRENT_USER.name}</div>
-                <div style={{ color: '#94A3B8', fontSize: '11px' }}>
-                  {CURRENT_USER.role === 'admin' ? 'Admin' : 'User'}
-                </div>
-              </div>
-              <div className="status-dot" />
-            </button>
-
-            {profileOpen && (
-              <div className="popover">
-                <div style={{ fontSize: '12px', color: '#94A3B8', marginBottom: '4px' }}>
-                  Profile & Linked Accounts
-                </div>
-                <button className="popover-btn">🔗 Link Jira account</button>
-                <button className="popover-btn">🔗 Link GitHub account</button>
-              </div>
-            )}
-          </div>
         </nav>
       </header>
 
       <main className="container">
-        {/* PAGE 1: LOGIN */}
-        {activePage === 'login' && (
+        {checkingSession ? (
           <div className="card">
-            <h2>Login Screen (Skeleton)</h2>
+            <p style={{ color: '#94A3B8' }}>Checking session…</p>
+          </div>
+        ) : !currentUser || activePage === 'login' ? (
+          /* PAGE 1: LOGIN */
+          <div className="card" style={{ maxWidth: '420px', margin: '40px auto' }}>
+            <h2>Sign In</h2>
+            <p style={{ color: '#94A3B8', fontSize: '13px', marginTop: '6px' }}>
+              Sign in with your Agent Stack account to continue.
+            </p>
+
+            {(loginError || isLockedOut) && (
+              <div
+                className="meta-box"
+                role="alert"
+                style={{
+                  marginTop: '16px',
+                  color: '#FCA5A5',
+                  borderColor: '#EF4444',
+                  backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                }}
+              >
+                {isLockedOut
+                  ? `Too many attempts. Try again in ${lockoutMinutes} ${lockoutMinutes === 1 ? 'minute' : 'minutes'} (${lockoutSecondsLeft}s).`
+                  : loginError}
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} style={{ marginTop: '16px' }}>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  htmlFor="login-username"
+                  style={{ display: 'block', fontSize: '13px', marginBottom: '6px' }}
+                >
+                  Username
+                </label>
+                <input
+                  id="login-username"
+                  type="text"
+                  className="text-input"
+                  style={{ width: '100%' }}
+                  autoComplete="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  disabled={loginBusy || isLockedOut}
+                  required
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label
+                  htmlFor="login-password"
+                  style={{ display: 'block', fontSize: '13px', marginBottom: '6px' }}
+                >
+                  Password
+                </label>
+                <input
+                  id="login-password"
+                  type="password"
+                  className="text-input"
+                  style={{ width: '100%' }}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={loginBusy || isLockedOut}
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn-primary"
+                style={{ width: '100%' }}
+                disabled={loginBusy || isLockedOut || !username.trim() || !password}
+              >
+                {isLockedOut
+                  ? `Locked (${lockoutSecondsLeft}s)`
+                  : loginBusy
+                    ? 'Signing in…'
+                    : 'Sign In'}
+              </button>
+            </form>
+          </div>
+        ) : activePage === 'panel' && currentUser.role === 'admin' ? (
+          /* PAGE 3: SECURITY PANEL */
+          <div className="card">
+            <h2>Security Panel</h2>
             <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Skeleton of the login and Sign in with Slack screen, active in Stage 2.
+              Security events panel, visible only to the admin role.
             </p>
           </div>
-        )}
-
-        {/* PAGE 2: CHAT */}
-        {activePage === 'chat' && (
+        ) : (
+          /* PAGE 2: CHAT */
           <div>
             <div className="card">
               <h2>Chat</h2>
@@ -159,7 +361,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* Error State (401, 422, 500, 502, 504 or Network Error) */}
+              {/* Error State (422, 500, 502, 504 or Network Error) */}
               {errorInfo && !typing && (
                 <div
                   className="meta-box"
@@ -171,22 +373,8 @@ export default function App() {
                     backgroundColor: 'rgba(239, 68, 68, 0.08)',
                   }}
                 >
-                  <div>
-                    <strong>
-                      {errorInfo.status === 401 ? 'Authentication Required: ' : 'Error: '}
-                    </strong>
-                    {errorInfo.message}
-                  </div>
-                  {errorInfo.status === 401 && (
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      style={{ marginTop: '10px', padding: '6px 12px', fontSize: '13px' }}
-                      onClick={() => setActivePage('login')}
-                    >
-                      Go to Login
-                    </button>
-                  )}
+                  <strong>Error: </strong>
+                  {errorInfo.message}
                 </div>
               )}
 
@@ -261,16 +449,6 @@ export default function App() {
                 </button>
               </form>
             </div>
-          </div>
-        )}
-
-        {/* PAGE 3: SECURITY PANEL */}
-        {activePage === 'panel' && CURRENT_USER.role === 'admin' && (
-          <div className="card">
-            <h2>Security Panel (Skeleton)</h2>
-            <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Skeleton of the security events panel, visible only to the admin role.
-            </p>
           </div>
         )}
       </main>
