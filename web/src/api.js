@@ -76,15 +76,13 @@ export async function login(username, password) {
   }
 
   if (response.status === 429) {
-    const serverSeconds = parseRetryAfter(response);
-    // Lock for 5 minutes (300s) by default, or use server value if shorter
-    const lockSeconds = serverSeconds ? Math.min(serverSeconds, 300) : 300;
-    const minutes = Math.max(1, Math.ceil(lockSeconds / 60));
+    const retrySeconds = parseRetryAfter(response) || 900;
+    const minutes = Math.max(1, Math.ceil(retrySeconds / 60));
     throw new ApiError(
       429,
       'TOO_MANY_ATTEMPTS',
       `Too many attempts. Try again in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`,
-      lockSeconds,
+      retrySeconds,
     );
   }
 

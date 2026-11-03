@@ -102,12 +102,12 @@ export default function App() {
       setLockoutSecondsLeft(0);
       setActivePage('chat');
     } catch (err) {
-      if (err?.status === 429) {
-        const seconds = err.retryAfterSeconds || 300;
-        setLockoutSecondsLeft(seconds);
-      }
-      setLoginError(err?.message || 'Invalid username or password.');
-    } finally {
+    if (err?.status === 429) {
+      const seconds = err.retryAfterSeconds || 900;
+      setLockoutSecondsLeft(seconds);
+    }
+    setLoginError(err?.message || 'Invalid username or password.');
+  } finally {
       setLoginBusy(false);
     }
   };
@@ -217,13 +217,6 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                type="button"
-                className="nav-link"
-                onClick={handleLogout}
-              >
-                Logout
-              </button>
             </>
           ) : (
             <button
