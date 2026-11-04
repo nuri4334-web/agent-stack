@@ -110,8 +110,9 @@ Identity comes only from the server session: `POST /api/auth/login` sets the `ag
   in a shared deployment. Any value other than `true` or `false` stops the server at start.
 - Use the same host name for the frontend and the server (`localhost` for both, or `127.0.0.1` for both).
 - **Run one server process.** The login attempt limit (at most 5 failed attempts per user name and at most 30 per IP
-  address in 15 minutes) is kept in memory: a restart resets it, and with several processes (`uvicorn --workers N`)
-  every process has its own counter, so the real limit is higher.
+  address in 15 minutes) and the limit of audit events without a session (at most 30 per IP address in 15 minutes) are
+  kept in memory: a restart resets them, and with several processes (`uvicorn --workers N`) every process has its own
+  counter, so the real limit is higher.
 - The IP address is the address of the connection. Proxy headers such as `X-Forwarded-For` are not read: behind a proxy
   all requests count as one IP address.
 - All stored password hashes use the same scrypt parameters today. A hash with a different `n` would make "wrong
@@ -119,6 +120,22 @@ Identity comes only from the server session: `POST /api/auth/login` sets the `ag
 
 Try it in `http://localhost:8000/docs`: `POST /api/auth/login` → Try it out → your user name and password; the browser
 keeps the cookie for the next requests.
+
+## Audit log
+
+Every gateway step that runs writes one row to `audit_events` (at most 7 rows per question, the same `request_id` as the
+answer); the row has only codes, counts and durations, never the question, a message, the answer or a password.
+
+See the events locally: sign in as an admin account in `http://localhost:8000/docs` (`POST /api/auth/login`), then
+`GET /api/admin/events` → Try it out (or open `http://localhost:8000/api/admin/events?limit=10` in the same browser).
+Newest event first, `limit` at least 1 and at most 100, default 50. A signed-in account that is not an admin gets 403;
+without a session the answer is 401.
+
+If a gateway event cannot be written (disk full, database locked), the question stops with 500 `SERVER_ERROR` and the
+AI is not called if it has not been called yet: nothing runs without a record. The server log gets only the step, the
+request id and the error type. Two records are different on purpose: if a login or logout event or an `ai_calls` row
+cannot be written, the login or the answer still works and the error is logged.
+Details: [`docs/data-model.md`](../docs/data-model.md) (section 7).
 
 ## End-to-end try
 

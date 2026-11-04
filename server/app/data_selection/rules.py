@@ -57,6 +57,18 @@ def find_target_channels(
     return "ok", targets
 
 
+def named_channel_id(question: str, channels: Sequence[tuple[str, str, str]]) -> str | None:
+    """For the audit log: the id of the one channel the question names, whatever its status.
+
+    None if the question names no channel or more than one, or if the name is not exactly one row of `channels`.
+    """
+    names = channels_in_question(question)
+    if len(names) != 1:
+        return None
+    rows = [slack_id for slack_id, name, _ in channels if normalize_channel_name(name) == names[0]]
+    return rows[0] if len(rows) == 1 else None
+
+
 def author_name(real_name: str | None, display_name: str | None, slack_id: str) -> str:
     """Real name first, otherwise display name, otherwise the Slack id. Only spaces count as empty."""
     for name in (real_name, display_name):

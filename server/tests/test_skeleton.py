@@ -36,7 +36,7 @@ def test_gateway_seven_steps_in_order():
     ]
 
 
-def test_stopped_request_does_not_reach_ai(monkeypatch):
+def test_stopped_request_does_not_reach_ai(monkeypatch, fixture_accounts):
     called = []
 
     def deny(c):

@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 
 from . import ai, settings
 from .accounts.rules import SignedInPerson
-from .audit.log import write_ai_call
+from .audit.event_limit import UnauthenticatedEventLimiter, unauthenticated_event_limiter
+from .audit.log import AuditWriteError, write_ai_call, write_event
+from .audit.rules import gateway_event
 from .schemas import AskResponse, SecuritySummary, SourceMessage
 from .data_selection.rules import MESSAGE_LIMIT
 from .data_selection.selection import select_messages
@@ -35,13 +37,17 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _new_request_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
 @dataclass
 class RequestContext:
     """The information carried along a question's journey through the gateway."""
 
     question: str
     person: SignedInPerson | None  # only from the server session
-    request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    request_id: str = field(default_factory=_new_request_id)
     status: str = "ok"
     selected_messages: list[SourceMessage] = field(default_factory=list)
     model_answer: str = ""
@@ -51,6 +57,8 @@ class RequestContext:
     security: SecuritySummary = field(default_factory=SecuritySummary)
     step_durations_ms: dict[str, float] = field(default_factory=dict)
     stopped: bool = False  # if True, later steps (including the AI) do not run
+    reason_code: str | None = None  # why the step stopped (API contract 11); handle_question writes it to the event
+    channel_id: str | None = None  # the channel of the events; only for the audit log, never decides access
     now: Callable[[], datetime] = _utc_now
     connection: sqlite3.Connection | None = None  # handle_question opens and closes it for every request
 
@@ -60,11 +68,12 @@ class RequestContext:
 def identity(c: RequestContext) -> None:
     if c.person is None:
         c.status = "no_access"
+        c.reason_code = "UNAUTHENTICATED"
         c.stopped = True
 
 
 # --- 2. Authorization (Stage 2): only the channels the user is a member of.
-# If not authorized: c.status = "no_access", c.stopped = True -> the AI is never called.
+# If not authorized: c.status = "no_access", c.reason_code = the code, c.stopped = True -> the AI is never called.
 def authorization(c: RequestContext) -> None:
     pass
 
@@ -74,16 +83,20 @@ def authorization(c: RequestContext) -> None:
 # not per-user authorization (that is step 2 in Stage 2).
 def data_selection(c: RequestContext) -> None:
     selection = select_messages(c.connection, c.question, limit=MESSAGE_LIMIT)
+    c.channel_id = selection.channel_id
     if selection.result == "no_slack_data":
         log.warning(
             "No Slack data in the database; run 'python -m app.slack_connector.seed load' "
             "or 'python -m app.slack_connector.sync' first."
         )
+        c.reason_code = "NO_SLACK_DATA"
         c.stopped = True
     elif selection.result == "channel_not_allowed":
         c.status = "no_access"
+        c.reason_code = "CHANNEL_NOT_ALLOWED"
         c.stopped = True
     elif not selection.messages:
+        c.reason_code = "NO_MESSAGES"
         c.stopped = True
     else:
         c.selected_messages = selection.messages
@@ -107,6 +120,7 @@ def ask_ai(c: RequestContext) -> None:
     try:
         response = ai.ask(instruction=DEFAULT_SYSTEM_INSTRUCTION, data=data_text)
     except ai.AIError as error:
+        c.reason_code = "TIMEOUT" if error.code == "TIMEOUT" else "PROVIDER_ERROR"
         _write_call_record(
             c,
             model=_error_model_name(),
@@ -187,6 +201,66 @@ STEPS = [
 ]
 
 
+def _write_step_event(c: RequestContext, step: str, duration_ms: float) -> None:
+    """Writes the event of a step in its own transaction, so the next step runs only after it is saved.
+
+    If it cannot be written the request stops (the safe side): no later step runs, the answer is 500.
+    The log gets only the step, the request id and the error type.
+    """
+    try:
+        with c.connection:
+            write_event(c.connection, **gateway_event(
+                step,
+                stopped=c.stopped,
+                reason_code=c.reason_code,
+                message_count=len(c.selected_messages),
+                person_id=c.person.id if c.person else None,
+                channel_id=c.channel_id,
+                request_id=c.request_id,
+                created_at=c.now().isoformat(),
+                duration_ms=duration_ms,
+            ))
+    except Exception as error:
+        log.error("Failed to write audit event (step %s, request %s): %s", step, c.request_id, type(error).__name__)
+        raise AuditWriteError() from error
+
+
+def record_unauthenticated_ask(
+    ip: str, now: datetime, duration_ms: float, limiter: UnauthenticatedEventLimiter = unauthenticated_event_limiter,
+) -> None:
+    """The event of /api/ask without a session (the endpoint answers 401; no step runs and the AI is never called).
+
+    Anyone can call the endpoint, so the events are limited per IP. Whatever happens here, the answer stays 401:
+    an error is only logged.
+    """
+    permit = limiter.allow(ip, now)
+    if not permit.allowed:
+        if permit.skipped == 1 or permit.skipped % 100 == 0:
+            log.warning("Unauthenticated ask events skipped (limit reached): %d", permit.skipped)
+        return
+    request_id = _new_request_id()
+    try:
+        connection = connect(settings.DATABASE_PATH)
+        try:
+            create_tables(connection)
+            with connection:
+                write_event(connection, **gateway_event(
+                    "identity",
+                    stopped=True,
+                    reason_code="UNAUTHENTICATED",
+                    message_count=0,
+                    person_id=None,
+                    channel_id=None,
+                    request_id=request_id,
+                    created_at=now.isoformat(),
+                    duration_ms=duration_ms,
+                ))
+        finally:
+            connection.close()
+    except Exception as error:
+        log.error("Failed to write audit event (step identity, request %s): %s", request_id, type(error).__name__)
+
+
 def handle_question(
     question: str, person: SignedInPerson | None, now: Callable[[], datetime] = _utc_now,
 ) -> AskResponse:
@@ -199,9 +273,15 @@ def handle_question(
             if c.stopped:
                 break
             start = time.perf_counter()
-            step(c)
+            try:
+                step(c)
+            except Exception:
+                # The AI error has its reason code from ask_ai; an unexpected error has none (API contract 11).
+                c.stopped = True
+                _write_step_event(c, name, _elapsed_ms(start))
+                raise
             c.step_durations_ms[name] = _elapsed_ms(start)
-        # Audit log (S1-03 / Stage 2): c.step_durations_ms and the decisions will be written from here.
+            _write_step_event(c, name, c.step_durations_ms[name])
     finally:
         c.connection.close()
 

@@ -138,6 +138,7 @@ No session, an expired session or an inactive account → `401`:
 Any other field → `422 INVALID_REQUEST` (from S2-01), so an old client never works silently.
 
 From S2-03: without a valid session → `401 UNAUTHENTICATED`, checked **before** the body. No gateway step runs and the AI is never called.
+From S2-04: such a request also writes one `identity` / `stopped` / `UNAUTHENTICATED` audit row, at most 30 rows per IP address in 15 minutes; the answer is the same `401` over this limit too.
 
 ### Successful response — `200`
 ```json
@@ -189,7 +190,7 @@ The answer is not streamed word by word (no streaming): the output check must se
 
 **In effect from:** S2-04.
 
-`limit`: whole number, at least 1, at most 100, default 50. Any other value (0, 101, not a number) → `422 INVALID_REQUEST`. Newest event first.
+`limit`: whole number written with digits only (no sign, spaces or decimal point), at least 1, at most 100, default 50. Any other value (0, 101, not a number, empty) or `limit` given more than once → `422 INVALID_REQUEST`. Newest event first.
 
 ### Successful response — `200`
 ```json
@@ -215,12 +216,12 @@ The answer is not streamed word by word (no streaming): the output check must se
 
 | Field | Description |
 |---|---|
-| `created_at` | ISO 8601 in **UTC** (`+00:00`). The frontend converts it to local time. |
+| `created_at` | ISO 8601 in **UTC** (`+00:00`); may have fractional seconds (at most 6 digits). The frontend converts it to local time. |
 | `request_id` | Same value as `request_id` of `/api/ask`. |
-| `person` | The user name, or `null` (identity unknown, Slack sync). |
-| `channel` | The channel **name** the event is about, or `null`. Only the name, never message text. |
-| `step` | A gateway step (`identity` … `presentation`) or `slack_sync`. |
-| `decision` | `passed` / `stopped` for a gateway step, `ok` / `error` for Slack sync. |
+| `person` | The user name, or `null` (identity unknown, login with an unknown user name, Slack sync). |
+| `channel` | The channel **name** the event is about, or `null`. Only the name, never message text. For a question: from `data_selection` on, the channel if the question names exactly one channel and that name is exactly one known channel; otherwise `null`. |
+| `step` | A gateway step (`identity` … `presentation`), `login`, `logout` or `slack_sync`. |
+| `decision` | `passed` / `stopped` for a gateway step, `login` and `logout`; `ok` / `error` for Slack sync. |
 | `reason_code` | A code from section 11, or `null`. |
 | `message_count`, `blocked_count`, `masked_count`, `suspicious_count` | Counts, at least 0. |
 | `duration_ms` | Duration of the step, milliseconds. |
@@ -260,7 +261,7 @@ The frontend may show the `error.message` text to the user; messages never conta
 
 ## 11. Reason codes (audit log and panel)
 
-**In effect from:** S2-03 … S2-05 (written by S2-04).
+**In effect from:** S2-03 (the `login` codes), S2-04 (the gateway codes), S2-05 (`NO_SLACK_ACCOUNT`, `NOT_CHANNEL_MEMBER`).
 
 | Code | Step | Meaning |
 |---|---|---|
@@ -274,7 +275,7 @@ The frontend may show the `error.message` text to the user; messages never conta
 | `NO_MESSAGES` | data_selection | No message matched the question. |
 | `PROVIDER_ERROR`, `TIMEOUT` | ask_ai | The AI call failed. |
 
-The reason codes of Slack sync are in `docs/data-model.md`. From schema version 4 (S2-02) the step column also accepts login and logout; the gateway and the login endpoint write these events from S2-03/S2-04.
+The reason codes of Slack sync are in `docs/data-model.md`. From schema version 4 (S2-02) the step column also accepts login and logout; the login endpoint writes these events from S2-03, the gateway writes its step events from S2-04. Until S2-05 the `authorization` step always passes, so `CHANNEL_NOT_ALLOWED` comes from `data_selection`. An unexpected error has no code: the step is `stopped` with `reason_code` `null`.
 
 ## Version notes
 - **v1 (S1-02):** First version.

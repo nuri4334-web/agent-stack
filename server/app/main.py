@@ -2,6 +2,7 @@
 import logging
 import re
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -17,9 +18,11 @@ from .accounts.login import attempt_login, end_session
 from .accounts.rules import SESSION_LIFETIME, SignedInPerson, is_session_token
 from .accounts.sessions import resolve_session
 from .ai import AIError
+from .audit.log import list_events
+from .audit.rules import parse_event_limit
 from . import settings, gateway
 from .database.schema import connect, create_tables
-from .schemas import ErrorResponse, AskResponse, AskRequest, LoginRequest, PersonResponse
+from .schemas import AuditEventList, ErrorResponse, AskResponse, AskRequest, LoginRequest, PersonResponse
 
 
 log = logging.getLogger("agentstack")
@@ -75,8 +78,17 @@ def _database() -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _client_ip(request: Request) -> str:
+    # The address of the connection; proxy headers such as X-Forwarded-For can be forged and are not read.
+    return request.client.host if request.client else "unknown"
+
+
 class NotSignedIn(Exception):
     """No valid session: no session, an expired session or an inactive account."""
+
+
+class Forbidden(Exception):
+    """A valid session of an active account, but the role is not allowed. Admin endpoints only."""
 
 
 def current_person(request: Request) -> SignedInPerson:
@@ -89,6 +101,35 @@ def current_person(request: Request) -> SignedInPerson:
     if person is None:
         raise NotSignedIn()
     return person
+
+
+def ask_person(request: Request) -> SignedInPerson:
+    """current_person for /api/ask: a refused question also leaves an audit event (limited; the answer stays 401)."""
+    start = time.perf_counter()
+    try:
+        return current_person(request)
+    except NotSignedIn:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        gateway.record_unauthenticated_ask(_client_ip(request), _utc_now(), duration_ms)
+        raise
+
+
+def current_admin(person: SignedInPerson = Depends(current_person)) -> SignedInPerson:
+    """Checked on every request by the endpoint itself: only the role "admin" passes, any other value is refused."""
+    if person.role != "admin":
+        raise Forbidden()
+    return person
+
+
+def read_event_limit(request: Request) -> int:
+    """Reads `limit` itself: a whole number with digits only (FastAPI's int would accept "5.0" and "+5").
+
+    So this dependency must come after current_admin in the endpoint: the session and the role are checked first.
+    """
+    try:
+        return parse_event_limit(request.query_params.getlist("limit"))
+    except ValueError:
+        raise RequestValidationError([]) from None
 
 
 async def read_ask_body(request: Request) -> AskRequest:
@@ -118,6 +159,11 @@ def _person_response(person: SignedInPerson) -> PersonResponse:
 @app.exception_handler(NotSignedIn)
 async def handle_not_signed_in(_: Request, __: NotSignedIn):
     return error_response(401, "UNAUTHENTICATED", "Please sign in.")
+
+
+@app.exception_handler(Forbidden)
+async def handle_forbidden(_: Request, __: Forbidden):
+    return error_response(403, "FORBIDDEN", "You don't have permission for this page.")
 
 
 @app.exception_handler(AIError)
@@ -153,10 +199,8 @@ def health():
     },
 )
 def login(body: LoginRequest, request: Request, response: Response):
-    # The address of the connection; proxy headers such as X-Forwarded-For can be forged and are not read.
-    ip = request.client.host if request.client else "unknown"
     with _database() as connection:
-        result = attempt_login(connection, body.username, body.password, ip, _utc_now())
+        result = attempt_login(connection, body.username, body.password, _client_ip(request), _utc_now())
     if result.retry_after is not None:
         limited = error_response(429, "TOO_MANY_ATTEMPTS", "Too many login attempts. Try again later.")
         limited.headers["Retry-After"] = str(result.retry_after)
@@ -203,7 +247,23 @@ def me(person: SignedInPerson = Depends(current_person)) -> PersonResponse:
     }},
 )
 def ask(
-    person: SignedInPerson = Depends(current_person),  # first: a request without a session never reaches the body
+    person: SignedInPerson = Depends(ask_person),  # first: a request without a session never reaches the body
     body: AskRequest = Depends(read_ask_body),
 ) -> AskResponse:
     return gateway.handle_question(question=body.question, person=person)
+
+
+@app.get(
+    "/api/admin/events",
+    response_model=AuditEventList,
+    responses={
+        401: {"model": ErrorResponse}, 403: {"model": ErrorResponse},
+        422: {"model": ErrorResponse}, 500: {"model": ErrorResponse},
+    },
+)
+def admin_events(
+    admin: SignedInPerson = Depends(current_admin),  # first: session and role before the limit
+    limit: int = Depends(read_event_limit),
+) -> AuditEventList:
+    with _database() as connection:
+        return AuditEventList(events=list_events(connection, limit))

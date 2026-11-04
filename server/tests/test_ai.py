@@ -24,7 +24,7 @@ def test_fake_provider_fixed_answer_and_counter(monkeypatch):
     assert ai.fake_call_count() == 2
 
 
-def test_stopped_request_does_not_increase_fake_counter(monkeypatch):
+def test_stopped_request_does_not_increase_fake_counter(monkeypatch, fixture_accounts):
     monkeypatch.setattr(settings, "AI_PROVIDER", "fake")
     ai.reset_fake_counter()
 

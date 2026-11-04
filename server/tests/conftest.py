@@ -10,7 +10,10 @@ from app.slack_connector import seed
 from app.database.schema import connect
 from app.accounts.login_limit import reset_login_attempts
 from app.accounts.rules import hash_password
-from tests.auth_clients import TEST_PASSWORD, make_anonymous_client, make_client_as, write_fixture_accounts
+from app.audit.event_limit import reset_unauthenticated_events
+from tests.auth_clients import (
+    TEST_PASSWORD, TEST_PERSON, make_anonymous_client, make_client_as, write_fixture_accounts,
+)
 
 # Channel id lists for tests (independent of .env): genel, dev, yonetim of the demo seed; C_IK is the fake #ik.
 TEST_ALLOWED_CHANNELS = ["C0C8ATRM073", "C0C83M051QD", "C0CB44VUCF2"]
@@ -69,6 +72,14 @@ def _reset_login_attempts():
 
 
 @pytest.fixture(autouse=True)
+def _reset_unauthenticated_events():
+    """The event limit of /api/ask without a session is in memory: every test starts with an empty one."""
+    reset_unauthenticated_events()
+    yield
+    reset_unauthenticated_events()
+
+
+@pytest.fixture(autouse=True)
 def _session_cookie_secure(monkeypatch):
     """In every test the session cookie is Secure, even if the developer's .env says SESSION_COOKIE_SECURE=false."""
     monkeypatch.setattr(settings, "SESSION_COOKIE_SECURE", True)
@@ -85,10 +96,13 @@ def fixture_accounts(_temporary_database, _fixture_password_hash):
     """Writes the five test accounts (auth_clients.FIXTURE_ACCOUNTS) to the temporary database.
 
     Not autouse: other tests see an empty people table.
+    TEST_PERSON must be the real row of ali: the gateway writes its id to the audit log (foreign key to people).
     """
     connection = connect(_temporary_database)
     try:
         write_fixture_accounts(connection, _fixture_password_hash, "2026-10-24T00:00:00+00:00")
+        ali_id = connection.execute("SELECT id FROM people WHERE username = 'ali'").fetchone()[0]
+        assert ali_id == TEST_PERSON.id, "TEST_PERSON.id must be the id of the account ali"
     finally:
         connection.close()
 

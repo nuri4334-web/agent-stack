@@ -144,12 +144,30 @@ Reason codes of Slack sync:
 
 Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; it only appears on the screen.
 
-**Login and logout (schema version 4; written from S2-03/S2-04):** `step = login` with `decision = passed`, or `stopped` with one of the reason codes below; `step = logout` with `decision = passed`. The user name and the password are never written; `person_id` is filled only when the person is known.
+**Login and logout (schema version 4; written from S2-03):** `step = login` with `decision = passed`, or `stopped` with one of the reason codes below; `step = logout` with `decision = passed`. The user name and the password are never written; `person_id` is filled only when the person is known.
 
 | Code | Decision | Meaning |
 |---|---|---|
 | `INVALID_CREDENTIALS` | `stopped` | Login failed (no such user, inactive account, wrong password or no password set; all the same code). |
 | `TOO_MANY_ATTEMPTS` | `stopped` | Login limit reached. |
+
+**Gateway steps (S2-04):** Every step that runs writes one row right after it finishes, in its own transaction, with the `request_id` of the answer and the `person_id` of the session. A stopped request writes nothing for the later steps, so a complete request has 7 rows. `decision = passed` has no reason code; `decision = stopped` has one of the codes below.
+
+| Code | Step | Meaning |
+|---|---|---|
+| `UNAUTHENTICATED` | `identity` | No valid session. |
+| `NO_SLACK_ACCOUNT` | `authorization` | The person has no linked Slack account (from S2-05). |
+| `NOT_CHANNEL_MEMBER` | `authorization` | The person's Slack account is not a member of the channel (from S2-05). |
+| `CHANNEL_NOT_ALLOWED` | `authorization` / `data_selection` | The channel is not `allowed`. |
+| `NO_SLACK_DATA` | `data_selection` | The database has no Slack data. |
+| `NO_MESSAGES` | `data_selection` | No message matched the question. |
+| `PROVIDER_ERROR`, `TIMEOUT` | `ask_ai` | The AI call failed; `TIMEOUT` → `TIMEOUT`, every other AI error code (e.g. `QUOTA_EXCEEDED`) → `PROVIDER_ERROR`. |
+
+- An unexpected error inside a step: the step is `stopped` with an empty `reason_code`, then the answer is 500.
+- `message_count`: messages selected (`data_selection`) or sent to the AI (`ask_ai`); 0 in the other steps. The other counts are 0 until the filters of Stage 3-4.
+- `channel_id`: from `data_selection` on, the channel if the question names exactly one channel and that name is exactly one row of `channels`, whatever its status; otherwise empty (no name, more than one name, a name that is not in the table). So `#ik` is empty in a database loaded from the seed (the seed has no `ik` row) and filled after a real sync.
+- `/api/ask` without a session: no step runs; one row is written (`identity`, `stopped`, `UNAUTHENTICATED`, `person_id` empty), at most 30 rows per IP address in 15 minutes (in memory). Over the limit only a count goes to the server log. `/api/auth/me` and the admin endpoint write no row.
+- **If a row cannot be written, the request stops:** the answer is 500 `SERVER_ERROR`, no later step runs and the AI is not called if it has not been called yet; the server log gets only the step, the request id and the error type. Without a session the answer stays 401 and the error is only logged. This is stricter than the login and logout events and `ai_calls`, where the login or the answer still works and the error is logged.
 
 ## 8. `ai_calls`
 

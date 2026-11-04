@@ -707,9 +707,9 @@ def test_identity_stops_without_person(sent_to_ai):
     assert _query("SELECT count(*) FROM ai_calls") == [(0,)]
 
 
-def test_identity_keeps_person_in_context(monkeypatch):
+def test_identity_keeps_person_in_context(monkeypatch, fixture_accounts):
     seen = []
-    monkeypatch.setattr(gateway, "STEPS", [("identity", gateway.identity), ("check", seen.append)])
+    monkeypatch.setattr(gateway, "STEPS", [("identity", gateway.identity), ("authorization", seen.append)])
     gateway.handle_question("#dev'i özetle", TEST_PERSON)
     assert seen[0].person == TEST_PERSON
     assert seen[0].stopped is False
