@@ -13,6 +13,11 @@ def _parse_list(value: str) -> list[str]:
     return [p.strip() for p in value.split(",") if p.strip()]
 
 
+def _text_or_default(value: str | None, default: str) -> str:
+    """The stripped value; a missing, empty or spaces-only value gives the default."""
+    return (value or "").strip() or default
+
+
 def parse_bool_setting(name: str, value: str) -> bool:
     """'true' or 'false' (spaces and case ignored). Anything else, also empty, stops the program: ValueError."""
     normalized = value.strip().lower()
@@ -44,8 +49,9 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "fake").strip().lower()
 # Secret Gemini API key (never written to logs, error messages or the screen)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-# Gemini model name and timeout (seconds)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+# Gemini model name (empty -> default is used) and timeout (seconds)
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = _text_or_default(os.getenv("GEMINI_MODEL"), DEFAULT_GEMINI_MODEL)
 AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "30"))
 # SQLite database file. A relative path is resolved from the repo root (empty -> default is used).
 DATABASE_PATH = ROOT / (os.getenv("DATABASE_PATH") or "server/agentstack.db")
