@@ -83,7 +83,7 @@ def test_full_request_writes_seven_events_in_step_order(fixture_accounts, sent_t
     gateway.handle_question("#dev'i özetle", TEST_PERSON)
     assert _steps() == [
         ("identity", "passed", None, None, 0),
-        ("authorization", "passed", None, None, 0),
+        ("authorization", "passed", None, DEV, 0),
         ("data_selection", "passed", None, DEV, 27),
         ("sanitization", "passed", None, DEV, 0),
         ("ask_ai", "passed", None, DEV, 27),
@@ -118,7 +118,7 @@ def test_question_without_channel_name_has_no_channel(fixture_accounts, sent_to_
     rows = _steps()
     assert len(rows) == 7
     assert {row[3] for row in rows} == {None}
-    assert [row[4] for row in rows] == [0, 0, 39, 0, 39, 0, 0]
+    assert [row[4] for row in rows] == [0, 0, 33, 0, 33, 0, 0]
 
 
 def test_two_named_channels_have_no_channel(fixture_accounts, sent_to_ai):
@@ -126,17 +126,16 @@ def test_two_named_channels_have_no_channel(fixture_accounts, sent_to_ai):
     assert {row[3] for row in _steps()} == {None}
 
 
-# --- Stopped in data selection
+# --- Stopped in authorization or data selection
 
 
 @pytest.mark.parametrize("question", ["#ik'i özetle", "#bugs neler var", "#dev ve #ik"])
-def test_channel_not_allowed_writes_three_events(fixture_accounts, sent_to_ai, question):
+def test_channel_not_allowed_stops_in_authorization(fixture_accounts, sent_to_ai, question):
     answer = gateway.handle_question(question, TEST_PERSON)
     assert answer.status == "no_access"
     assert _steps() == [
         ("identity", "passed", None, None, 0),
-        ("authorization", "passed", None, None, 0),
-        ("data_selection", "stopped", "CHANNEL_NOT_ALLOWED", None, 0),
+        ("authorization", "stopped", "CHANNEL_NOT_ALLOWED", None, 0),
     ]
     assert sent_to_ai == []
 
@@ -145,7 +144,7 @@ def test_channel_not_allowed_writes_three_events(fixture_accounts, sent_to_ai, q
 def test_channel_row_of_a_refused_channel_is_written(fixture_accounts, sent_to_ai, status):
     _insert_ik(status)
     gateway.handle_question("#ik'i özetle", TEST_PERSON)
-    assert _steps()[-1] == ("data_selection", "stopped", "CHANNEL_NOT_ALLOWED", "C_IK", 0)
+    assert _steps()[-1] == ("authorization", "stopped", "CHANNEL_NOT_ALLOWED", "C_IK", 0)
 
 
 def test_no_messages_writes_three_events(fixture_accounts, sent_to_ai):
@@ -154,7 +153,7 @@ def test_no_messages_writes_three_events(fixture_accounts, sent_to_ai):
     assert (answer.status, answer.answer) == ("ok", gateway.NO_MESSAGES_ANSWER)
     assert _steps() == [
         ("identity", "passed", None, None, 0),
-        ("authorization", "passed", None, None, 0),
+        ("authorization", "passed", None, DEV, 0),
         ("data_selection", "stopped", "NO_MESSAGES", DEV, 0),
     ]
     assert sent_to_ai == []
@@ -188,7 +187,7 @@ def test_ai_error_writes_five_events_and_keeps_502_504(client_as, monkeypatch, c
     assert r.json()["error"]["code"] == reason
     assert _steps() == [
         ("identity", "passed", None, None, 0),
-        ("authorization", "passed", None, None, 0),
+        ("authorization", "passed", None, DEV, 0),
         ("data_selection", "passed", None, DEV, 27),
         ("sanitization", "passed", None, DEV, 0),
         ("ask_ai", "stopped", reason, DEV, 27),

@@ -11,10 +11,15 @@ The server's SQLite tables. Sprint 1 · S1-03; accounts and sessions: Sprint 2 �
 
 ## Authorization chain
 
-Which messages a person can see is found with this chain:
-`people` → `linked_accounts` (source `slack`) → `slack_users` → `channel_memberships` → `channels` (status `allowed`).
-So a person can see the messages of channels where their linked Slack account is a member and whose status is `allowed`; if one link of the chain is missing, they can see nothing.
-The authorization check in Stage 2 (`gateway.py` step 2) will use this chain. The temporary `user` field of the request is not part of this chain.
+Which messages a person can see is found with this chain (S2-05, `gateway.py` step 2):
+`people` → `linked_accounts` (source `slack`) → `channel_memberships` → `channels` (allowed at question time).
+So a person can see the messages of channels where their linked Slack account is a member and which are allowed; if one link of the chain is missing, they can see nothing.
+
+- The linked Slack id comes from the session (`linked_accounts.source_account_id`) and is compared with `channel_memberships.slack_user_id`; `slack_users` is not queried (the foreign key of `channel_memberships` keeps the row there).
+- "Allowed at question time": `allowed` in the table **and** by the current `ALLOWED_CHANNELS` and `BLOCKED_CHANNELS` (`question_time_channels`, `server/app/data_selection/selection.py`). The blocked list always wins, even with a membership row.
+- The decision is the pure function `decide_access` (`server/app/data_selection/rules.py`). The role is not one of its inputs: an `admin` sees only the channels their Slack account is a member of.
+- Memberships are read from the database on every question, there is no cache: a change counts from the next question. The memberships themselves change only with a Slack sync, so a person removed from a channel can see it until the next sync.
+- Data selection reads only the channels of this decision; without a decision it reads nothing.
 
 ## 1. `people`
 
@@ -156,8 +161,8 @@ Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; 
 | Code | Step | Meaning |
 |---|---|---|
 | `UNAUTHENTICATED` | `identity` | No valid session. |
-| `NO_SLACK_ACCOUNT` | `authorization` | The person has no linked Slack account (from S2-05). |
-| `NOT_CHANNEL_MEMBER` | `authorization` | The person's Slack account is not a member of the channel (from S2-05). |
+| `NO_SLACK_ACCOUNT` | `authorization` | The person has no linked Slack account. |
+| `NOT_CHANNEL_MEMBER` | `authorization` | The person's Slack account is not a member of the channel. |
 | `CHANNEL_NOT_ALLOWED` | `authorization` / `data_selection` | The channel is not `allowed`. |
 | `NO_SLACK_DATA` | `data_selection` | The database has no Slack data. |
 | `NO_MESSAGES` | `data_selection` | No message matched the question. |
@@ -165,7 +170,7 @@ Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; 
 
 - An unexpected error inside a step: the step is `stopped` with an empty `reason_code`, then the answer is 500.
 - `message_count`: messages selected (`data_selection`) or sent to the AI (`ask_ai`); 0 in the other steps. The other counts are 0 until the filters of Stage 3-4.
-- `channel_id`: from `data_selection` on, the channel if the question names exactly one channel and that name is exactly one row of `channels`, whatever its status; otherwise empty (no name, more than one name, a name that is not in the table). So `#ik` is empty in a database loaded from the seed (the seed has no `ik` row) and filled after a real sync.
+- `channel_id`: from `authorization` on, the channel if the question names exactly one channel and that name is exactly one row of `channels`, whatever its status; otherwise empty (no name, more than one name, a name that is not in the table). So `#ik` is empty in a database loaded from the seed (the seed has no `ik` row) and filled after a real sync.
 - `/api/ask` without a session: no step runs; one row is written (`identity`, `stopped`, `UNAUTHENTICATED`, `person_id` empty), at most 30 rows per IP address in 15 minutes (in memory). Over the limit only a count goes to the server log. `/api/auth/me` and the admin endpoint write no row.
 - **If a row cannot be written, the request stops:** the answer is 500 `SERVER_ERROR`, no later step runs and the AI is not called if it has not been called yet; the server log gets only the step, the request id and the error type. Without a session the answer stays 401 and the error is only logged. This is stricter than the login and logout events and `ai_calls`, where the login or the answer still works and the error is logged.
 
@@ -264,14 +269,14 @@ Code: `server/app/data_selection/`. The gateway's step 3 (`gateway.data_selectio
 - Names without `#` are not recognized ("genel olarak…", "dev bir sorun", "yonetim hakkında"); these questions go to all allowed channels.
 - `#` expressions made only of digits ("PR #17", "#1 öncelik") are not channel names; they are ignored.
 - The name in the question is turned into a channel row by the `name` in the table; the permission is checked from that row's id and status.
-- If at least one of the names in the question is not in the database, belongs to more than one row (e.g. a stale old name), or is not `allowed` (e.g. `#ik`, `#bugs`), the request stops: the AI is not called, the answer status is `no_access`. This is a channel-level check, not per-person authorization (Stage 2).
+- If at least one of the names in the question is not in the database, belongs to more than one row (e.g. a stale old name), or is not `allowed` (e.g. `#ik`, `#bugs`), the request stops: the AI is not called, the answer status is `no_access`. Authorization (step 2) decides this first; data selection applies the same channel rule again as a second layer.
 - At question time a channel is read only if it is `allowed` in the table **and** by the current `.env` lists (`ALLOWED_CHANNELS`, `BLOCKED_CHANNELS`); so a channel blocked or removed from the allow list in `.env` is not read even before the next sync or seed load. List warnings are written to the server log once per process.
-- If the question has no channel name, all channels with status `allowed` are read (with the same question-time check).
+- Only the channels of the authorization decision are read (see "Authorization chain"). If the question has no channel name, these are all allowed channels the person's Slack account is a member of (with the same question-time check).
 - The query also always applies the `channels.status = 'allowed'` condition; a message of an `excluded` or `blocked` channel is never selected by any path.
 - At most 50 messages (in total, not per channel) are selected: the newest 50 messages (by `ts`), sent to the AI from oldest to newest.
 - Author name: `real_name`, otherwise `display_name`, otherwise `slack_id`. The `<@U…>` and `<#C…>` mentions in the text are turned into readable names only in the data sent to the AI (`@Ali Kaya`, `#yonetim`); `clean_text` does not change, other `<…>` forms stay as they are.
 - If there are no messages in the selected channels, the AI is not called and the answer is "No messages were found for this question." If the `channels` table is completely empty, the server log says to run `seed load` or `sync` first.
-- `sources` in the answer stays empty in Sprint 1.
+- `sources` in the answer is the list of messages really sent to the AI, in the same order; its `id` is `<channel_id>:<ts>`, which is not sent to the AI (S2-05).
 
 ## Known limitations
 

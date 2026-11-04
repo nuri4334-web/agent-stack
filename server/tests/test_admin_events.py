@@ -187,7 +187,7 @@ def test_person_and_channel_names_of_a_question(client_as):
     assert len(events) == 7
     assert {e["request_id"] for e in events} == {answer["request_id"]}
     assert {e["person"] for e in events} == {"ali"}
-    assert [e["channel"] for e in reversed(events)] == [None, None, "dev", "dev", "dev", "dev", "dev"]
+    assert [e["channel"] for e in reversed(events)] == [None, "dev", "dev", "dev", "dev", "dev", "dev"]
     assert [e["step"] for e in events][0] == "presentation"
 
 

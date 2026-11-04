@@ -17,8 +17,8 @@ from .audit.event_limit import UnauthenticatedEventLimiter, unauthenticated_even
 from .audit.log import AuditWriteError, write_ai_call, write_event
 from .audit.rules import gateway_event
 from .schemas import AskResponse, SecuritySummary, SourceMessage
-from .data_selection.rules import MESSAGE_LIMIT
-from .data_selection.selection import select_messages
+from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id
+from .data_selection.selection import member_channel_ids, question_time_channels, select_messages
 from .database.schema import connect, create_tables
 
 log = logging.getLogger("agentstack")
@@ -49,7 +49,9 @@ class RequestContext:
     person: SignedInPerson | None  # only from the server session
     request_id: str = field(default_factory=_new_request_id)
     status: str = "ok"
+    readable_channel_ids: tuple[str, ...] | None = None  # None: no authorization decision, so nothing is read
     selected_messages: list[SourceMessage] = field(default_factory=list)
+    sources: list[SourceMessage] = field(default_factory=list)  # the messages really sent to the AI
     model_answer: str = ""
     model_used: str = ""
     input_tokens: int = 0
@@ -72,18 +74,35 @@ def identity(c: RequestContext) -> None:
         c.stopped = True
 
 
-# --- 2. Authorization (Stage 2): only the channels the user is a member of.
+# --- 2. Authorization (S2-05): only allowed channels the person's Slack account is a member of; the role plays no part.
+# Read from the database on every question, so a change counts from the next question.
 # If not authorized: c.status = "no_access", c.reason_code = the code, c.stopped = True -> the AI is never called.
 def authorization(c: RequestContext) -> None:
-    pass
+    channels = question_time_channels(c.connection)
+    c.channel_id = named_channel_id(c.question, channels)
+    slack_user_id = c.person.slack_user_id if c.person else None
+    members = member_channel_ids(c.connection, slack_user_id) if slack_user_id else frozenset()
+    decision = decide_access(c.question, channels, members, slack_linked=slack_user_id is not None)
+    if decision.reason_code:
+        c.status = "no_access"
+        c.reason_code = decision.reason_code
+        c.stopped = True
+        return
+    c.readable_channel_ids = decision.channel_ids
 
 
 # --- 3. Data selection (S1-05): only messages related to the question, upper limit 50.
-# If the question has "#name", that channel(s), otherwise all allowed channels. Channel-level check;
-# not per-user authorization (that is step 2 in Stage 2).
+# Reads only the channels of the authorization decision. Defense in depth: without a decision nothing is read, and
+# the channel rule is applied again, so CHANNEL_NOT_ALLOWED can come from here too (e.g. a setting changed meanwhile).
 def data_selection(c: RequestContext) -> None:
-    selection = select_messages(c.connection, c.question, limit=MESSAGE_LIMIT)
-    c.channel_id = selection.channel_id
+    if c.readable_channel_ids is None:
+        log.error("Data selection without an authorization decision (request %s).", c.request_id)
+        c.status = "no_access"
+        c.stopped = True
+        return
+    selection = select_messages(
+        c.connection, c.question, readable_channel_ids=c.readable_channel_ids, limit=MESSAGE_LIMIT,
+    )
     if selection.result == "no_slack_data":
         log.warning(
             "No Slack data in the database; run 'python -m app.slack_connector.seed load' "
@@ -136,6 +155,7 @@ def ask_ai(c: RequestContext) -> None:
         input_tokens=response.input_tokens,
         output_tokens=response.output_tokens,
     )
+    c.sources = c.selected_messages
     c.model_answer = response.answer
     c.model_used = response.model
     c.input_tokens = response.input_tokens
@@ -295,6 +315,6 @@ def handle_question(
         request_id=c.request_id,
         status=c.status,
         answer=answer,
-        sources=[],  # Empty in Sprint 1 (API contract); filled together with authorization in Stage 2.
+        sources=c.sources if c.status == "ok" else [],
         security=c.security,
     )

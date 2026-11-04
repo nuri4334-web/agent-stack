@@ -99,7 +99,7 @@ def test_renamed_channel_stays_allowed_new_channel_with_old_name_excluded(db):
     )
     assert _message_count(db, "C_DEV2") == 0
     # At question time the name goes to the new (excluded) channel: refused; the new name reads the old id.
-    lists = {"allowed_channels": ALLOWED_IDS, "blocked_channels": BLOCKED_IDS}
+    lists = {"readable_channel_ids": ALLOWED_IDS, "allowed_channels": ALLOWED_IDS, "blocked_channels": BLOCKED_IDS}
     assert select_messages(db, "#dev'i özetle", **lists).result == "channel_not_allowed"
     renamed = select_messages(db, "#dev-eski'yi özetle", **lists)
     assert renamed.result == "ok"
