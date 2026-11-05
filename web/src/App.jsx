@@ -1,11 +1,78 @@
-import { useEffect, useState } from 'react';
-import { API_URL, askQuestion, getCurrentUser, login, logout } from './api';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import { API_URL, askQuestion, getAdminEvents, getCurrentUser, login, logout } from './api';
 
 function formatLocalTime(isoString) {
-  if (!isoString) return '';
+  if (!isoString) return '—';
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return isoString;
   return date.toLocaleString();
+}
+
+function getEventKey(ev) {
+  if (ev.id) return String(ev.id);
+  return `${ev.created_at}-${ev.request_id || 'no-req'}-${ev.step}-${ev.person || 'anon'}-${ev.duration_ms}`;
+}
+
+function groupEventsByRequestId(events) {
+  const groups = [];
+  const byRequestId = new Map();
+
+  for (const ev of events) {
+    if (!ev.request_id) {
+      groups.push({
+        groupKey: getEventKey(ev),
+        request_id: null,
+        latest_at: ev.created_at,
+        person: ev.person,
+        channel: ev.channel,
+        decision: ev.decision,
+        reason_code: ev.reason_code,
+        duration_ms: ev.duration_ms || 0,
+        message_count: ev.message_count || 0,
+        blocked_count: ev.blocked_count || 0,
+        masked_count: ev.masked_count || 0,
+        suspicious_count: ev.suspicious_count || 0,
+        steps: [ev],
+      });
+      continue;
+    }
+
+    let group = byRequestId.get(ev.request_id);
+    if (!group) {
+      group = {
+        groupKey: `req-${ev.request_id}-${ev.created_at}`,
+        request_id: ev.request_id,
+        latest_at: ev.created_at,
+        person: ev.person,
+        channel: ev.channel,
+        decision: ev.decision,
+        reason_code: ev.reason_code,
+        duration_ms: 0,
+        message_count: 0,
+        blocked_count: 0,
+        masked_count: 0,
+        suspicious_count: 0,
+        steps: [],
+      };
+      byRequestId.set(ev.request_id, group);
+      groups.push(group);
+    }
+
+    group.steps.push(ev);
+    group.duration_ms += Number(ev.duration_ms) || 0;
+    if (!group.person && ev.person) group.person = ev.person;
+    if (!group.channel && ev.channel) group.channel = ev.channel;
+    if (ev.decision === 'stopped' || ev.decision === 'error') {
+      group.decision = ev.decision;
+      if (ev.reason_code) group.reason_code = ev.reason_code;
+    }
+    group.message_count = Math.max(group.message_count, ev.message_count || 0);
+    group.blocked_count += ev.blocked_count || 0;
+    group.masked_count += ev.masked_count || 0;
+    group.suspicious_count += ev.suspicious_count || 0;
+  }
+
+  return groups;
 }
 
 export default function App() {
@@ -30,6 +97,13 @@ export default function App() {
   const [typing, setTyping] = useState(false);
   const [answerData, setAnswerData] = useState(null);
   const [errorInfo, setErrorInfo] = useState(null);
+
+  // Security Panel state (S2-09)
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState('');
+  const [groupByRequest, setGroupByRequest] = useState(false);
+  const [expandedRequests, setExpandedRequests] = useState({});
 
   // Check active session on startup
   useEffect(() => {
@@ -77,6 +151,37 @@ export default function App() {
     return () => clearInterval(timer);
   }, [lockoutSecondsLeft]);
 
+  const loadAdminEvents = useCallback(async () => {
+    setEventsLoading(true);
+    setEventsError('');
+    try {
+      const list = await getAdminEvents(50);
+      setEvents(list);
+    } catch (err) {
+      if (err?.status === 401) {
+        setCurrentUser(null);
+        setEvents([]);
+        setLoginError('Please sign in.');
+        setActivePage('login');
+        return;
+      }
+      if (err?.status === 403) {
+        setEvents([]);
+        setEventsError('Admins only.');
+        return;
+      }
+      setEventsError(err?.message || 'Could not load security events.');
+    } finally {
+      setEventsLoading(false);
+    }
+  }, []);
+
+
+  const openSecurityPanel = () => {
+    setActivePage('panel');
+    loadAdminEvents();
+  };
+
   const isLockedOut = lockoutSecondsLeft > 0;
   const lockoutMinutes = Math.max(1, Math.ceil(lockoutSecondsLeft / 60));
 
@@ -99,15 +204,17 @@ export default function App() {
       setSentQuestion('');
       setAnswerData(null);
       setErrorInfo(null);
+      setEvents([]);
+      setEventsError('');
       setLockoutSecondsLeft(0);
       setActivePage('chat');
     } catch (err) {
-    if (err?.status === 429) {
-      const seconds = err.retryAfterSeconds || 900;
-      setLockoutSecondsLeft(seconds);
-    }
-    setLoginError(err?.message || 'Invalid username or password.');
-  } finally {
+      if (err?.status === 429) {
+        const seconds = err.retryAfterSeconds || 900;
+        setLockoutSecondsLeft(seconds);
+      }
+      setLoginError(err?.message || 'Invalid username or password.');
+    } finally {
       setLoginBusy(false);
     }
   };
@@ -120,6 +227,8 @@ export default function App() {
     setSentQuestion('');
     setAnswerData(null);
     setErrorInfo(null);
+    setEvents([]);
+    setEventsError('');
     setLoginError('');
     setActivePage('login');
   };
@@ -155,11 +264,39 @@ export default function App() {
     }
   };
 
+  const toggleRequestExpand = (reqId) => {
+    setExpandedRequests((prev) => ({
+      ...prev,
+      [reqId]: !prev[reqId],
+    }));
+  };
+
   const isNoAccess = answerData?.status === 'no_access';
   const sources = Array.isArray(answerData?.sources) ? answerData.sources : [];
   const security = answerData?.security || { blocked: 0, masked: 0, suspicious: 0 };
   const displayName = currentUser?.name || currentUser?.username || '';
   const avatarText = (displayName || 'U').slice(0, 2).toUpperCase();
+  const groupedEvents = groupByRequest ? groupEventsByRequestId(events) : [];
+
+  const renderDecisionBadge = (decision) => {
+    const isStopped = decision === 'stopped' || decision === 'error';
+    return (
+      <span
+        style={{
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: '999px',
+          fontSize: '12px',
+          fontWeight: 600,
+          backgroundColor: isStopped ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.15)',
+          color: isStopped ? '#FCA5A5' : '#86EFAC',
+          border: `1px solid ${isStopped ? '#EF4444' : '#22C55E'}`,
+        }}
+      >
+        {decision}
+      </span>
+    );
+  };
 
   return (
     <div>
@@ -179,15 +316,12 @@ export default function App() {
                 Chat
               </button>
 
-              {/* The Security Panel is visible only to the admin role */}
-              {currentUser.role === 'admin' && (
-                <button
-                  className={`nav-link ${activePage === 'panel' ? 'active' : ''}`}
-                  onClick={() => setActivePage('panel')}
-                >
-                  Security Panel
-                </button>
-              )}
+              <button
+                className={`nav-link ${activePage === 'panel' ? 'active' : ''}`}
+                onClick={openSecurityPanel}
+              >
+                Security Panel
+              </button>
 
               {/* Profile & Sign Out Dropdown */}
               <div className="profile-wrapper">
@@ -216,7 +350,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-
             </>
           ) : (
             <button
@@ -314,13 +447,266 @@ export default function App() {
               </button>
             </form>
           </div>
-        ) : activePage === 'panel' && currentUser.role === 'admin' ? (
-          /* PAGE 3: SECURITY PANEL */
+        ) : activePage === 'panel' ? (
+          /* PAGE 3: SECURITY PANEL (S2-09) */
           <div className="card">
-            <h2>Security Panel</h2>
-            <p style={{ color: '#94A3B8', marginTop: '8px' }}>
-              Security events panel, visible only to the admin role.
-            </p>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px',
+              }}
+            >
+              <div>
+                <h2>Security Panel</h2>
+                <p style={{ color: '#94A3B8', fontSize: '13px', marginTop: '4px' }}>
+                  Gateway audit events (newest first · contains no message or question text)
+                </p>
+              </div>
+
+              {!eventsError && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className={`nav-link ${groupByRequest ? 'active' : ''}`}
+                    onClick={() => setGroupByRequest((prev) => !prev)}
+                  >
+                    {groupByRequest ? 'Show All Steps' : 'Group by Request'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={loadAdminEvents}
+                    disabled={eventsLoading}
+                  >
+                    {eventsLoading ? 'Loading…' : 'Refresh'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {eventsError && (
+              <div
+                className="meta-box"
+                role="alert"
+                style={{
+                  marginTop: '16px',
+                  color: '#FCA5A5',
+                  borderColor: '#EF4444',
+                  backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                }}
+              >
+                {eventsError}
+              </div>
+            )}
+
+            {!eventsError && eventsLoading && events.length === 0 && (
+              <div className="meta-box" style={{ marginTop: '16px', color: '#94A3B8' }}>
+                Loading security events…
+              </div>
+            )}
+
+            {!eventsError && !eventsLoading && events.length === 0 && (
+              <div className="meta-box" style={{ marginTop: '16px', color: '#94A3B8' }}>
+                No security events recorded yet.
+              </div>
+            )}
+
+            {!eventsError && events.length > 0 && (
+              <div style={{ marginTop: '16px', overflowX: 'auto' }}>
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: '13px',
+                    textAlign: 'left',
+                  }}
+                >
+                  <thead>
+                    <tr
+                      style={{
+                        borderBottom: '1px solid #334155',
+                        color: '#94A3B8',
+                      }}
+                    >
+                      <th style={{ padding: '10px 8px' }}>Time</th>
+                      <th style={{ padding: '10px 8px' }}>Request ID</th>
+                      <th style={{ padding: '10px 8px' }}>Person</th>
+                      <th style={{ padding: '10px 8px' }}>Channel</th>
+                      <th style={{ padding: '10px 8px' }}>Step</th>
+                      <th style={{ padding: '10px 8px' }}>Decision</th>
+                      <th style={{ padding: '10px 8px' }}>Reason Code</th>
+                      <th style={{ padding: '10px 8px' }}>Duration (ms)</th>
+                      <th style={{ padding: '10px 8px' }}>Counts (Msg / Blk / Msk / Susp)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!groupByRequest
+                      ? events.map((ev) => {
+                          const isStopped = ev.decision === 'stopped' || ev.decision === 'error';
+                          return (
+                            <tr
+                              key={getEventKey(ev)}
+                              style={{
+                                borderBottom: '1px solid #1E293B',
+                                backgroundColor: isStopped
+                                  ? 'rgba(239, 68, 68, 0.12)'
+                                  : 'transparent',
+                              }}
+                            >
+                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                {formatLocalTime(ev.created_at)}
+                              </td>
+                              <td style={{ padding: '10px 8px', fontFamily: 'monospace' }}>
+                                {ev.request_id || '—'}
+                              </td>
+                              <td style={{ padding: '10px 8px', fontWeight: 600 }}>
+                                {ev.person || '—'}
+                              </td>
+                              <td style={{ padding: '10px 8px' }}>
+                                {ev.channel ? `#${ev.channel}` : '—'}
+                              </td>
+                              <td style={{ padding: '10px 8px' }}>{ev.step}</td>
+                              <td style={{ padding: '10px 8px' }}>
+                                {renderDecisionBadge(ev.decision)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: '10px 8px',
+                                  fontFamily: 'monospace',
+                                  color: isStopped ? '#FCA5A5' : '#CBD5E1',
+                                }}
+                              >
+                                {ev.reason_code || '—'}
+                              </td>
+                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                {typeof ev.duration_ms === 'number'
+                                  ? `${ev.duration_ms.toFixed(2)} ms`
+                                  : '—'}
+                              </td>
+                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                {ev.message_count} / {ev.blocked_count} / {ev.masked_count} /{' '}
+                                {ev.suspicious_count}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      : groupedEvents.map((group) => {
+                          const isStopped =
+                            group.decision === 'stopped' || group.decision === 'error';
+                          const canExpand = Boolean(group.request_id && group.steps.length > 1);
+                          const isExpanded = Boolean(
+                            group.request_id && expandedRequests[group.request_id],
+                          );
+                          return (
+                            <Fragment key={group.groupKey}>
+                              <tr
+                                onClick={
+                                  canExpand
+                                    ? () => toggleRequestExpand(group.request_id)
+                                    : undefined
+                                }
+                                style={{
+                                  borderBottom: '1px solid #1E293B',
+                                  cursor: canExpand ? 'pointer' : 'default',
+                                  backgroundColor: isStopped
+                                    ? 'rgba(239, 68, 68, 0.12)'
+                                    : 'transparent',
+                                }}
+                              >
+                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                  {formatLocalTime(group.latest_at)}
+                                </td>
+                                <td style={{ padding: '10px 8px', fontFamily: 'monospace' }}>
+                                  {canExpand ? (isExpanded ? '▼ ' : '▶ ') : ''}
+                                  {group.request_id || '—'}
+                                </td>
+                                <td style={{ padding: '10px 8px', fontWeight: 600 }}>
+                                  {group.person || '—'}
+                                </td>
+                                <td style={{ padding: '10px 8px' }}>
+                                  {group.channel ? `#${group.channel}` : '—'}
+                                </td>
+                                <td style={{ padding: '10px 8px' }}>
+                                  {group.steps.length > 1
+                                    ? `${group.steps.length} steps`
+                                    : group.steps[0]?.step}
+                                </td>
+                                <td style={{ padding: '10px 8px' }}>
+                                  {renderDecisionBadge(group.decision)}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: '10px 8px',
+                                    fontFamily: 'monospace',
+                                    color: isStopped ? '#FCA5A5' : '#CBD5E1',
+                                  }}
+                                >
+                                  {group.reason_code || '—'}
+                                </td>
+                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                  {group.duration_ms.toFixed(2)} ms
+                                </td>
+                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
+                                  {group.message_count} / {group.blocked_count} /{' '}
+                                  {group.masked_count} / {group.suspicious_count}
+                                </td>
+                              </tr>
+                              {isExpanded &&
+                                group.steps.map((stepEv) => {
+                                  const stepStopped =
+                                    stepEv.decision === 'stopped' || stepEv.decision === 'error';
+                                  return (
+                                    <tr
+                                      key={getEventKey(stepEv)}
+                                      style={{
+                                        borderBottom: '1px solid #1E293B',
+                                        backgroundColor: stepStopped
+                                          ? 'rgba(239, 68, 68, 0.18)'
+                                          : 'rgba(15, 23, 42, 0.6)',
+                                        fontSize: '12px',
+                                      }}
+                                    >
+                                      <td style={{ padding: '8px 8px 8px 24px', color: '#94A3B8' }}>
+                                        {formatLocalTime(stepEv.created_at)}
+                                      </td>
+                                      <td style={{ padding: '8px', fontFamily: 'monospace' }}>
+                                        ↳ step
+                                      </td>
+                                      <td style={{ padding: '8px' }}>{stepEv.person || '—'}</td>
+                                      <td style={{ padding: '8px' }}>
+                                        {stepEv.channel ? `#${stepEv.channel}` : '—'}
+                                      </td>
+                                      <td style={{ padding: '8px', fontWeight: 600 }}>
+                                        {stepEv.step}
+                                      </td>
+                                      <td style={{ padding: '8px' }}>
+                                        {renderDecisionBadge(stepEv.decision)}
+                                      </td>
+                                      <td style={{ padding: '8px', fontFamily: 'monospace' }}>
+                                        {stepEv.reason_code || '—'}
+                                      </td>
+                                      <td style={{ padding: '8px' }}>
+                                        {typeof stepEv.duration_ms === 'number'
+                                          ? `${stepEv.duration_ms.toFixed(2)} ms`
+                                          : '—'}
+                                      </td>
+                                      <td style={{ padding: '8px' }}>
+                                        {stepEv.message_count} / {stepEv.blocked_count} /{' '}
+                                        {stepEv.masked_count} / {stepEv.suspicious_count}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </Fragment>
+                          );
+                        })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         ) : (
           /* PAGE 2: CHAT */
