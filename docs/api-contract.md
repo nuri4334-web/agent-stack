@@ -34,7 +34,7 @@ Until a task is merged, the server behaves as in the rows above it. Example: bef
 - Cookie name `agentstack_session`, attributes `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=28800`.
 - A session lasts at most 8 hours, counted from login (absolute). There is no idle timeout. After 8 hours every request gets `401 UNAUTHENTICATED`.
 - The cookie value is a random token (at least 32 random bytes). The database keeps only the SHA-256 hash of the token, never the token itself.
-- `Secure` is on by default. The setting `SESSION_COOKIE_SECURE=false` turns it off **only for local development over `http://localhost`**; never in a demo or a shared deployment.
+- `Secure` is on by default. The setting `SESSION_COOKIE_SECURE=false` turns it off **only on a single computer over `http://localhost`** (local development, or a demo on that computer); never in a shared or networked deployment.
 - Every successful login creates a **new** session (an old cookie is never reused). Logout deletes the session on the server.
 - The frontend cannot read the cookie (`HttpOnly`). It learns who is signed in only from `GET /api/auth/me`.
 

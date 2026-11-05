@@ -106,8 +106,9 @@ Identity comes only from the server session: `POST /api/auth/login` sets the `ag
 
 - `SESSION_COOKIE_SECURE` in `.env` is `true` by default. While you try the screen on `http://localhost`, write
   `SESSION_COOKIE_SECURE=false` in `.env`; otherwise the browser does not send the cookie back: the login looks
-  successful, but the next requests get 401. Use `false` **only** for local development over `http://localhost`, never
-  in a shared deployment. Any value other than `true` or `false` stops the server at start.
+  successful, but the next requests get 401. Use `false` **only** on a single computer over `http://localhost`
+  (local development, or a demo there), never in a shared or networked deployment. Any value other than `true` or
+  `false` stops the server at start.
 - Use the same host name for the frontend and the server (`localhost` for both, or `127.0.0.1` for both).
 - **Run one server process.** The login attempt limit (at most 5 failed attempts per user name and at most 30 per IP
   address in 15 minutes) and the limit of audit events without a session (at most 30 per IP address in 15 minutes) are
@@ -146,6 +147,73 @@ AI is not called if it has not been called yet: nothing runs without a record. T
 request id and the error type. Two records are different on purpose: if a login or logout event or an `ai_calls` row
 cannot be written, the login or the answer still works and the error is logged.
 Details: [`docs/data-model.md`](../docs/data-model.md) (section 7).
+
+## Demo 1 setup
+
+For a demo on a single computer, in this order. Run the commands inside `server/`.
+
+1. **`.env` (repo root).** These lines must be right; keys are never written here or shown on the screen:
+
+   | Setting | What it must be |
+   |---|---|
+   | `AI_PROVIDER` | `gemini` for the demo; `fake` is the backup. |
+   | `GEMINI_API_KEY` | Your own key; must not be empty with `gemini`. |
+   | `GEMINI_MODEL` | The model name; empty uses the default in `app/settings.py`. |
+   | `ALLOWED_CHANNELS` | The IDs of genel, dev and yonetim (see "Channel IDs"). |
+   | `BLOCKED_CHANNELS` | The ID of ik. |
+   | `SESSION_COOKIE_SECURE` | `false`, only on a single computer over `http://localhost`. |
+   | `FRONTEND_ORIGINS` | `http://localhost:5173` |
+
+2. **Check the settings.** This prints only yes/no values and counts, never a key:
+
+   ```powershell
+   .venv\Scripts\python -c "from app import settings as s; print('provider', s.AI_PROVIDER, '| model set', bool(s.GEMINI_MODEL), '| key set', bool(s.GEMINI_API_KEY), '| secure cookie', s.SESSION_COOKIE_SECURE, '| allowed', len(s.ALLOWED_CHANNELS), '| blocked', len(s.BLOCKED_CHANNELS), '| origins', s.FRONTEND_ORIGINS)"
+   ```
+
+   Expected: `model set True`, `key set True`, `secure cookie False`, `allowed 3`, `blocked` at least 1. This does not prove
+   that the key works; only a real question does. A variable set in the terminal wins over `.env`: use a new terminal.
+
+3. **Database.** Stop the server first (Windows cannot delete a file in use), then (see "Accounts"; every password is
+   at least 12 characters):
+
+   ```powershell
+   if (Test-Path .\agentstack.db) { Remove-Item .\agentstack.db }
+   .venv\Scripts\python -m app.slack_connector.seed load
+   .venv\Scripts\python -m app.accounts create --username ali --name "Ali Kaya"
+   .venv\Scripts\python -m app.accounts create --username ayse --name "Ayşe Demir"
+   .venv\Scripts\python -m app.accounts create --username admin --name "Admin" --role admin
+   .venv\Scripts\python -m app.accounts link-slack --username ali --slack-id U0CA5HH3M1V
+   .venv\Scripts\python -m app.accounts link-slack --username ayse --slack-id U0CAQKKLXTN
+   .venv\Scripts\python -m app.accounts list
+   ```
+
+   Expected: `Loaded: 3 channels (allowed 3, blocked 0), 8 users, 20 memberships, 39 messages.` (`blocked 0` is right: the
+   seed has no ik.) In `list`, ali and ayse have a Slack ID and admin has `-`.
+
+4. **Server and screen.** One server process, without `--reload` or `--workers`:
+
+   ```powershell
+   .venv\Scripts\python -m uvicorn app.main:app
+   ```
+
+   In a second terminal, inside `web/` (`web/.env` is not needed for this address):
+
+   ```powershell
+   npm run dev
+   ```
+
+   Open `http://localhost:5173` in the browser, not `127.0.0.1`.
+
+5. **Event list.** Use the Security Panel. Without the panel: sign out on the screen first, because the screen and
+   `http://localhost:8000/docs` share one session cookie. Then in `/docs`: `POST /api/auth/login` as admin, and
+   `GET /api/admin/events` → Try it out. This shows at most 50 events (the default); `/docs` has no `limit` box. The demo
+   flow alone writes 21 events, so do not use a `limit` lower than 50.
+
+6. **From Gemini to the fake provider.** Stop the server, write `AI_PROVIDER=fake` in `.env`, start the server again.
+   The flow stays the same; only the answer text changes.
+
+7. **Locked out.** After 5 failed logins a user name is locked for 15 minutes. The counter is in memory: restart the
+   server.
 
 ## End-to-end try
 

@@ -18,6 +18,7 @@ client = TestClient(app)
 ALI ="U0CA5HH3M1V"
 FIXED_NOW = datetime(2026, 10, 25, 9, 30, tzinfo=timezone.utc)
 LINE_START = re.compile(r"^\[#([\w-]+) \| ", re.MULTILINE)
+EVENTS = "/api/admin/events"
 
 
 @pytest.fixture(autouse=True)
@@ -331,3 +332,53 @@ def test_ali_yonetim_question_ai_not_called(sent):
         assert text not in body["answer"]
         assert all(text not in s["text"] for s in body["sources"])
     assert body["status"] == "no_access"
+
+
+def _events_of_request(events, request_id):
+    """The events of one request, oldest first (the list is newest first)."""
+    return [e for e in reversed(events) if e["request_id"] == request_id]
+
+
+def test_demo_1_flow_in_order(client_as, sent_to_ai):
+    question = "#yonetim'de neler konuşuldu?"
+    ali = client  # signed in by _signed_in_client
+
+    refused = ali.post("/api/ask", json={"question": question})
+    assert refused.status_code == 200
+    assert refused.json()["status"] == "no_access"
+    assert refused.json()["answer"] == gateway.NO_ACCESS_ANSWER
+    assert refused.json()["sources"] == []
+    assert ai.fake_call_count() == 0
+    assert sent_to_ai == []
+
+    answered = client_as("ayse").post("/api/ask", json={"question": question})
+    assert answered.status_code == 200
+    assert answered.json()["status"] == "ok"
+    assert [s["channel"] for s in answered.json()["sources"]] == ["yonetim"] * 6
+    assert ai.fake_call_count() == 1
+    assert set(LINE_START.findall(sent_to_ai[0])) == {"yonetim"}
+
+    listing = client_as("admin").get(EVENTS)
+    assert listing.status_code == 200
+    events = listing.json()["events"]
+    ali_events = _events_of_request(events, refused.json()["request_id"])
+    ayse_events = _events_of_request(events, answered.json()["request_id"])
+    # The exact list also proves that no step ran after authorization: no ask_ai row.
+    assert [(e["person"], e["step"], e["decision"], e["reason_code"], e["channel"]) for e in ali_events] == [
+        ("ali", "identity", "passed", None, None),
+        ("ali", "authorization", "stopped", "NOT_CHANNEL_MEMBER", "yonetim"),
+    ]
+    assert [
+        (e["person"], e["step"], e["decision"], e["reason_code"], e["channel"], e["message_count"])
+        for e in ayse_events
+    ] == [
+        ("ayse", name, "passed", None, channel, count)
+        for (name, _), channel, count in zip(gateway.STEPS, [None] + ["yonetim"] * 6, [0, 0, 6, 0, 6, 0, 0])
+    ]
+    assert events.index(ayse_events[0]) < events.index(ali_events[-1])
+    for text in [question, ai.FAKE_FIXED_ANSWER, *_channel_texts("yonetim")]:
+        assert text not in listing.text
+
+    forbidden = ali.get(EVENTS)
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "FORBIDDEN"
