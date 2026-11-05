@@ -40,9 +40,10 @@ class PersonResponse(BaseModel):
 
 
 class SourceMessage(BaseModel):
+    id: str  # "<channel_id>:<ts>" (API contract 8)
     channel: str
     author: str
-    time: str  # ISO 8601, e.g. 2026-10-22T14:05:00+03:00
+    time: str  # ISO 8601 in UTC, e.g. 2026-10-22T11:05:00+00:00
     text: str
 
 

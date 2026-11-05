@@ -121,6 +121,16 @@ Identity comes only from the server session: `POST /api/auth/login` sets the `ag
 Try it in `http://localhost:8000/docs`: `POST /api/auth/login` → Try it out → your user name and password; the browser
 keeps the cookie for the next requests.
 
+## Who can read what
+
+A person reads only channels that are allowed and that their linked Slack account is a member of; the role gives no
+channel access, and an account without a linked Slack account reads nothing. Details:
+[`docs/data-model.md`](../docs/data-model.md) ("Authorization chain").
+
+**Stale access:** memberships come from the last Slack sync. A person removed from a channel in Slack can still see it
+until the next `sync`; automatic sync comes in Stage 5. A channel added to `BLOCKED_CHANNELS` is closed on the next
+question, without a sync.
+
 ## Audit log
 
 Every gateway step that runs writes one row to `audit_events` (at most 7 rows per question, the same `request_id` as the

@@ -27,6 +27,12 @@ def _signed_in_client(client_as, monkeypatch):
 
 
 @pytest.fixture
+def ayse_asks(client_as, monkeypatch):
+    """The questions of the test are asked by Ayşe: she is a member of every allowed channel (S2-05)."""
+    monkeypatch.setitem(globals(), "client", client_as("ayse"))
+
+
+@pytest.fixture
 def sent(monkeypatch):
     """Captures the data texts sent to the AI; calls the real fake provider (the counter works)."""
     captured = []
@@ -88,7 +94,7 @@ def test_summarize_dev_ai_called_once_and_only_dev(sent):
     body = r.json()
     assert body["status"] == "ok"
     assert body["answer"] == ai.FAKE_FIXED_ANSWER
-    assert body["sources"] == []
+    assert [s["channel"] for s in body["sources"]] == ["dev"] * 27
     assert ai.fake_call_count() == 1
     assert len(sent) == 1
     channels = LINE_START.findall(sent[0])
@@ -98,7 +104,7 @@ def test_summarize_dev_ai_called_once_and_only_dev(sent):
         assert text not in sent[0]
 
 
-def test_no_channel_name_only_allowed_channels(sent):
+def test_no_channel_name_only_allowed_channels(sent, ayse_asks):
     _add_excluded_channel()
     r = _ask("geçen hafta neler oldu?")
     assert r.status_code == 200
@@ -109,7 +115,7 @@ def test_no_channel_name_only_allowed_channels(sent):
     assert "TEST - excluded message" not in sent[0]
 
 
-def test_pr_number_does_not_get_no_access_goes_to_all_allowed_channels(sent):
+def test_pr_number_does_not_get_no_access_goes_to_all_allowed_channels(sent, ayse_asks):
     r = _ask("PR #17 ne durumda?")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
@@ -130,7 +136,7 @@ def test_not_allowed_channel_no_access_ai_not_called(sent, question):
     assert _call_rows() == []
 
 
-def test_blocked_id_no_access_even_if_table_says_allowed(sent):
+def test_blocked_id_no_access_even_if_table_says_allowed(sent, ayse_asks):
     # Stale data: the table says "allowed" for #ik (e.g. written before the id was blocked).
     connection = connect(settings.DATABASE_PATH)
     try:
@@ -176,17 +182,20 @@ def test_old_name_settings_logged_once(sent, monkeypatch, caplog):
 
 def test_ai_not_called_if_no_messages(sent, monkeypatch, tmp_path, caplog, client_as, _fixture_password_hash):
     monkeypatch.setattr(settings, "DATABASE_PATH", tmp_path / "empty.db")
-    # The session must be in the same database; this account needs no Slack data.
+    # The session must be in the same database. The account has a Slack link (S2-05), but there are no channels.
     connection = connect(settings.DATABASE_PATH)
     try:
         create_tables(connection)
-        store.create_account(
-            connection, username="unlinked", name="Unlinked User", role="user",
+        person_id = store.create_account(
+            connection, username="ali", name="Ali Kaya", role="user",
             password_hash=_fixture_password_hash, created_at=FIXED_NOW.isoformat(),
         )
+        with connection:
+            connection.execute("INSERT INTO slack_users (slack_id) VALUES (?)", (ALI,))
+        store.link_slack_account(connection, person_id, ALI, linked_at=FIXED_NOW.isoformat())
     finally:
         connection.close()
-    monkeypatch.setitem(globals(), "client", client_as("unlinked"))
+    monkeypatch.setitem(globals(), "client", client_as("ali"))
     with caplog.at_level(logging.WARNING, logger="agentstack"):
         r = _ask("#dev'i özetle")
     assert r.status_code == 200
@@ -312,7 +321,6 @@ def test_red_test_preconditions():
     ) == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Stage 2: no authorization layer")
 def test_ali_yonetim_question_ai_not_called(sent):
     r = _ask("#yonetim'de neler konuşuldu?")
     assert r.status_code == 200

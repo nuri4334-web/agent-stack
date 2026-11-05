@@ -146,8 +146,8 @@ def test_people_empty_without_fixture_accounts():
         connection.close()
 
 
-def _ask(client_as, question):
-    r = client_as("ali").post("/api/ask", json={"question": question})
+def _ask(client_as, question, username="ali"):
+    r = client_as(username).post("/api/ask", json={"question": question})
     assert r.status_code == 200
     return r.json()
 
@@ -158,7 +158,7 @@ def test_channels_sent_to_ai_one_channel(sent_to_ai, client_as):
 
 
 def test_channels_sent_to_ai_no_channel_name(sent_to_ai, client_as):
-    _ask(client_as, "geçen hafta neler oldu?")
+    _ask(client_as, "geçen hafta neler oldu?", "ayse")
     assert channels_sent_to_ai(sent_to_ai) == [{"dev", "genel", "yonetim"}]
 
 

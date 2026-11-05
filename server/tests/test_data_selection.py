@@ -12,6 +12,8 @@ from app.database.schema import connect, create_tables
 DEV, GENEL, YONETIM = "C0C83M051QD", "C0C8ATRM073", "C0CB44VUCF2"
 CHANNELS = [(DEV, "dev", "allowed"), (GENEL, "genel", "allowed"), (YONETIM, "yonetim", "allowed"),
             ("C0OLD000001", "old", "excluded")]
+# These tests are about the channel rule, so the authorization decision lets every channel through.
+EVERY_CHANNEL = [DEV, GENEL, YONETIM, "C0OLD000001"]
 
 
 @pytest.fixture
@@ -82,7 +84,7 @@ def test_slack_mentions_turned_into_readable_names():
 
 
 def test_dev_selection_only_dev_oldest_to_newest(seeded):
-    selection = select_messages(seeded, "#dev'i özetle")
+    selection = select_messages(seeded, "#dev'i özetle", readable_channel_ids=EVERY_CHANNEL)
     assert selection.result == "ok"
     assert len(selection.messages) == 27
     assert {m.channel for m in selection.messages} == {"dev"}
@@ -93,7 +95,7 @@ def test_dev_selection_only_dev_oldest_to_newest(seeded):
 
 def test_no_name_only_allowed_channels(seeded):
     _add_excluded_channel(seeded)
-    selection = select_messages(seeded, "geçen hafta neler oldu?")
+    selection = select_messages(seeded, "geçen hafta neler oldu?", readable_channel_ids=EVERY_CHANNEL)
     assert selection.result == "ok"
     assert len(selection.messages) == 39
     assert {m.channel for m in selection.messages} == {"dev", "genel", "yonetim"}
@@ -103,7 +105,7 @@ def test_excluded_channel_not_read_in_query_layer_either(seeded, monkeypatch):
     _add_excluded_channel(seeded)
     # Even if the target decision is wrong (excluded channel in the list), the query does not return the excluded channel.
     monkeypatch.setattr(selection_module, "find_target_channels", lambda question, c: ("ok", ["C0OLD000001", DEV]))
-    selection = select_messages(seeded, "herhangi")
+    selection = select_messages(seeded, "herhangi", readable_channel_ids=EVERY_CHANNEL)
     assert {m.channel for m in selection.messages} == {"dev"}
     assert not any("excluded message" in m.text for m in selection.messages)
 
@@ -120,7 +122,9 @@ def test_fifty_message_limit_newest_fifty():
                 "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) VALUES ('C1', ?, 'U1', ?, ?)",
                 (f"{1792000000 + i}.000000", f"2026-10-22T10:{i // 60:02d}:{i % 60:02d}+00:00", f"message {i}"),
             )
-    selection = select_messages(connection, "#dev'i özetle", allowed_channels=["C1"], blocked_channels=[])
+    selection = select_messages(
+        connection, "#dev'i özetle", readable_channel_ids=["C1"], allowed_channels=["C1"], blocked_channels=[],
+    )
     connection.close()
     assert len(selection.messages) == 50
     assert [m.text for m in selection.messages] == [f"message {i}" for i in range(11, 61)]
@@ -131,7 +135,9 @@ def test_empty_list_if_allowed_channel_has_no_messages():
     create_tables(connection)
     with connection:
         connection.execute("INSERT INTO channels (slack_id, name, is_private, status) VALUES ('C1', 'dev', 0, 'allowed')")
-    selection = select_messages(connection, "#dev'i özetle", allowed_channels=["C1"], blocked_channels=[])
+    selection = select_messages(
+        connection, "#dev'i özetle", readable_channel_ids=["C1"], allowed_channels=["C1"], blocked_channels=[],
+    )
     connection.close()
     assert selection.result == "ok"
     assert selection.messages == []
@@ -155,7 +161,9 @@ def test_renamed_channel_question_mapping():
 def test_question_time_blocklist_wins(seeded):
     # The table still says "allowed" for dev (no sync since the setting changed).
     assert seeded.execute("SELECT status FROM channels WHERE slack_id = ?", (DEV,)).fetchone() == ("allowed",)
-    lists = {"allowed_channels": [DEV, GENEL, YONETIM], "blocked_channels": [DEV]}
+    lists = {
+        "readable_channel_ids": EVERY_CHANNEL, "allowed_channels": [DEV, GENEL, YONETIM], "blocked_channels": [DEV],
+    }
     selection = select_messages(seeded, "#dev'i özetle", **lists)
     assert (selection.result, selection.messages) == ("channel_not_allowed", [])
     selection = select_messages(seeded, "geçen hafta neler oldu?", **lists)
@@ -164,18 +172,26 @@ def test_question_time_blocklist_wins(seeded):
 
 
 def test_question_time_removed_from_allowlist_not_read(seeded):
-    selection = select_messages(seeded, "#dev'i özetle", allowed_channels=[GENEL, YONETIM], blocked_channels=[])
+    selection = select_messages(
+        seeded, "#dev'i özetle", readable_channel_ids=EVERY_CHANNEL,
+        allowed_channels=[GENEL, YONETIM], blocked_channels=[],
+    )
     assert (selection.result, selection.messages) == ("channel_not_allowed", [])
-    selection = select_messages(seeded, "#genel", allowed_channels=[], blocked_channels=[])
+    selection = select_messages(
+        seeded, "#genel", readable_channel_ids=EVERY_CHANNEL, allowed_channels=[], blocked_channels=[],
+    )
     assert (selection.result, selection.messages) == ("channel_not_allowed", [])
 
 
 def test_question_time_uses_settings_by_default(seeded, monkeypatch):
     monkeypatch.setattr(settings, "BLOCKED_CHANNELS", [DEV])
-    assert select_messages(seeded, "#dev'i özetle").result == "channel_not_allowed"
+    assert select_messages(seeded, "#dev'i özetle", readable_channel_ids=EVERY_CHANNEL).result == "channel_not_allowed"
 
 
 def test_query_layer_drops_blocked_even_if_target_decision_wrong(seeded, monkeypatch):
     monkeypatch.setattr(selection_module, "find_target_channels", lambda question, c: ("ok", [DEV, GENEL]))
-    selection = select_messages(seeded, "herhangi", allowed_channels=[DEV, GENEL, YONETIM], blocked_channels=[DEV])
+    selection = select_messages(
+        seeded, "herhangi", readable_channel_ids=EVERY_CHANNEL,
+        allowed_channels=[DEV, GENEL, YONETIM], blocked_channels=[DEV],
+    )
     assert {m.channel for m in selection.messages} == {"genel"}

@@ -37,7 +37,6 @@ def _reset_counter():
 
 # --- Channel membership -----------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_ali_asks_private_channel_he_is_not_in(client_as, sent_to_ai):
     """Ali asks about #yonetim, which he is not a member of: no_access and the AI is never called."""
     r = ask(client_as("ali"), "#yonetim'de neler konuşuldu?")
@@ -48,7 +47,6 @@ def test_ali_asks_private_channel_he_is_not_in(client_as, sent_to_ai):
     assert sent_to_ai == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_ali_general_question_does_not_leak_yonetim(client_as, sent_to_ai):
     """Ali asks without naming a channel: only his own channels reach the AI, never #yonetim."""
     r = ask(client_as("ali"), "geçen hafta neler oldu?")
@@ -58,7 +56,6 @@ def test_ali_general_question_does_not_leak_yonetim(client_as, sent_to_ai):
     assert channels_sent_to_ai(sent_to_ai) == [{"dev", "genel"}]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_admin_role_gives_no_channel_access(client_as, sent_to_ai):
     """An admin linked to a Slack account outside #yonetim asks about it: the role gives no channel access."""
     r = ask(client_as("admin_linked"), "#yonetim'de neler konuşuldu?")
@@ -68,7 +65,6 @@ def test_admin_role_gives_no_channel_access(client_as, sent_to_ai):
     assert sent_to_ai == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STAGE2)
 def test_unlinked_user_sees_no_channel_data(client_as, sent_to_ai):
     """A user without a linked Slack account asks about #dev: no_access and no channel data reaches the AI."""
     r = ask(client_as("unlinked"), "#dev'i özetle")

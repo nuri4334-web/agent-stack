@@ -164,15 +164,17 @@ From S2-04: such a request also writes one `identity` / `stopped` / `UNAUTHENTIC
 | `request_id` | The request id. To match it with the audit log in the panel. |
 | `status` | `"ok"` or `"no_access"`. |
 | `answer` | Plain text. **The frontend shows it as plain text**; links and images inside are not made active (against EchoLeak-type leaks). |
-| `sources` | The messages the answer is based on. **Empty until S2-05.** |
+| `sources` | The messages really sent to the AI, in the same order (oldest to newest), at most 50. Empty in a `no_access` answer and in the "No messages were found for this question." answer. Error answers have no `sources` field. |
 | `sources[].id` | `"<channel_id>:<ts>"` (Slack channel id and message `ts`). Stable (does not change when the database is loaded again), unique, contains no message text. The frontend uses it as the list key, never the array index. |
 | `sources[].time` | ISO 8601 in **UTC** (`+00:00`). The frontend converts it to local time. |
 | `security` | How many things were blocked, masked or found suspicious in this request. |
 
 Sources come only from channels the person may read and only from messages that were really sent to the AI.
 
+A person with a linked Slack account who may read no channel and asks without naming a channel gets `200` with `status: "ok"`, `answer: "No messages were found for this question."` and empty `sources`; the AI is not called.
+
 ### No access — still `200`
-Signed in, but the person has no linked Slack account, the channel is not allowed, or the person's Slack account is not a member of the channel (per person from S2-05; "channel not allowed" already today):
+Signed in, but the person has no linked Slack account, the channel is not allowed, or the person's Slack account is not a member of the channel. The body is the same for every reason, so it never tells whether a channel exists or is private; the reason is only in the audit log:
 ```json
 {
   "request_id": "9a1b2c3d4e5f",
@@ -219,7 +221,7 @@ The answer is not streamed word by word (no streaming): the output check must se
 | `created_at` | ISO 8601 in **UTC** (`+00:00`); may have fractional seconds (at most 6 digits). The frontend converts it to local time. |
 | `request_id` | Same value as `request_id` of `/api/ask`. |
 | `person` | The user name, or `null` (identity unknown, login with an unknown user name, Slack sync). |
-| `channel` | The channel **name** the event is about, or `null`. Only the name, never message text. For a question: from `data_selection` on, the channel if the question names exactly one channel and that name is exactly one known channel; otherwise `null`. |
+| `channel` | The channel **name** the event is about, or `null`. Only the name, never message text. For a question: from `authorization` on, the channel if the question names exactly one channel and that name is exactly one known channel; otherwise `null`. |
 | `step` | A gateway step (`identity` … `presentation`), `login`, `logout` or `slack_sync`. |
 | `decision` | `passed` / `stopped` for a gateway step, `login` and `logout`; `ok` / `error` for Slack sync. |
 | `reason_code` | A code from section 11, or `null`. |
@@ -275,7 +277,7 @@ The frontend may show the `error.message` text to the user; messages never conta
 | `NO_MESSAGES` | data_selection | No message matched the question. |
 | `PROVIDER_ERROR`, `TIMEOUT` | ask_ai | The AI call failed. |
 
-The reason codes of Slack sync are in `docs/data-model.md`. From schema version 4 (S2-02) the step column also accepts login and logout; the login endpoint writes these events from S2-03, the gateway writes its step events from S2-04. Until S2-05 the `authorization` step always passes, so `CHANNEL_NOT_ALLOWED` comes from `data_selection`. An unexpected error has no code: the step is `stopped` with `reason_code` `null`.
+The reason codes of Slack sync are in `docs/data-model.md`. From schema version 4 (S2-02) the step column also accepts login and logout; the login endpoint writes these events from S2-03, the gateway writes its step events from S2-04. `CHANNEL_NOT_ALLOWED` normally comes from `authorization`; `data_selection` checks the channel again as a second layer (e.g. a setting changed between the two steps). If a question names several channels, the first refused name gives the code; for each name the channel rule comes before membership, and `NO_SLACK_ACCOUNT` comes before both. An unexpected error has no code: the step is `stopped` with `reason_code` `null`.
 
 ## Version notes
 - **v1 (S1-02):** First version.
