@@ -1,20 +1,12 @@
-// The server address is read from a setting (the frontend has no secret keys)
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export class ApiError extends Error {
   constructor(status, code, message, retryAfterSeconds = null) {
     super(message);
+    this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
-  }
-}
-
-async function parseJsonSafe(response) {
-  try {
-    return await response.json();
-  } catch {
-    return null;
   }
 }
 
@@ -25,7 +17,10 @@ function parseRetryAfter(response) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-// S2-08: Check current session on startup (GET /api/auth/me)
+/**
+ * Checks who is currently signed in via the session cookie.
+ * Returns the user object on 200, or null on 401.
+ */
 export async function getCurrentUser() {
   let response;
   try {
@@ -34,26 +29,32 @@ export async function getCurrentUser() {
       credentials: 'include',
     });
   } catch {
-    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server. Check that the server is running.');
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server.');
   }
 
   if (response.status === 401) {
     return null;
   }
 
-  const data = await parseJsonSafe(response);
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(response.status, 'INVALID_RESPONSE', 'Received an invalid response from the server.');
+  }
+
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      data?.error?.code || 'HTTP_ERROR',
-      data?.error?.message || `Request failed (HTTP ${response.status}).`,
-    );
+    const code = data?.error?.code || 'SERVER_ERROR';
+    const message = data?.error?.message || 'An unexpected error occurred.';
+    throw new ApiError(response.status, code, message);
   }
 
   return data;
 }
 
-// S2-08: Sign in with username and password (POST /api/auth/login)
+/**
+ * Signs in with username and password (POST /api/auth/login).
+ */
 export async function login(username, password) {
   let response;
   try {
@@ -66,13 +67,7 @@ export async function login(username, password) {
       body: JSON.stringify({ username, password }),
     });
   } catch {
-    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server. Check that the server is running.');
-  }
-
-  const data = await parseJsonSafe(response);
-
-  if (response.status === 401) {
-    throw new ApiError(401, 'INVALID_CREDENTIALS', 'Invalid username or password.');
+    throw new ApiError(0, 'NETWORK_ERROR', 'Unable to sign in right now. Please try again.');
   }
 
   if (response.status === 429) {
@@ -86,10 +81,21 @@ export async function login(username, password) {
     );
   }
 
+  if (response.status === 401) {
+    throw new ApiError(401, 'INVALID_CREDENTIALS', 'Invalid username or password.');
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(response.status, 'INVALID_RESPONSE', 'Unable to sign in right now. Please try again.');
+  }
+
   if (!response.ok) {
     throw new ApiError(
       response.status,
-      data?.error?.code || 'HTTP_ERROR',
+      data?.error?.code || 'SERVER_ERROR',
       'Unable to sign in right now. Please try again.',
     );
   }
@@ -97,7 +103,9 @@ export async function login(username, password) {
   return data;
 }
 
-// S2-08: Sign out and clear session cookie (POST /api/auth/logout -> 204)
+/**
+ * Signs out the current session (POST /api/auth/logout).
+ */
 export async function logout() {
   try {
     await fetch(`${API_URL}/api/auth/logout`, {
@@ -105,11 +113,13 @@ export async function logout() {
       credentials: 'include',
     });
   } catch {
-    // Even on network error, the frontend clears its in-memory user state
+    // Even if the network fails, clear client state so the user returns to login.
   }
 }
 
-// S2-07: Connect chat screen to the server (API contract v3)
+/**
+ * Sends a question to POST /api/ask using the active session cookie.
+ */
 export async function askQuestion(question) {
   let response;
   try {
@@ -122,19 +132,59 @@ export async function askQuestion(question) {
       body: JSON.stringify({ question }),
     });
   } catch {
-    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server. Check that the server is running.');
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server. Please check your connection.');
   }
 
-  const data = await parseJsonSafe(response);
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(response.status, 'INVALID_RESPONSE', 'Received an invalid response from the server.');
+  }
 
   if (!response.ok) {
-    const code = data?.error?.code || 'HTTP_ERROR';
-    const message =
-      response.status === 401
-        ? data?.error?.message || 'Please sign in to ask a question.'
-        : data?.error?.message || `Request failed (HTTP ${response.status}).`;
+    const code = data?.error?.code || 'SERVER_ERROR';
+    const message = data?.error?.message || 'An unexpected error occurred.';
     throw new ApiError(response.status, code, message);
   }
 
   return data;
+}
+
+/**
+ * Fetches security audit events for the admin panel (GET /api/admin/events).
+ */
+export async function getAdminEvents(limit = 50) {
+  let response;
+  try {
+    response = await fetch(`${API_URL}/api/admin/events?limit=${limit}`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server.');
+  }
+
+  if (response.status === 401) {
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Please sign in.');
+  }
+
+  if (response.status === 403) {
+    throw new ApiError(403, 'FORBIDDEN', 'Admins only.');
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(response.status, 'INVALID_RESPONSE', 'Received an invalid response from the server.');
+  }
+
+  if (!response.ok) {
+    const code = data?.error?.code || 'SERVER_ERROR';
+    const message = data?.error?.message || 'Could not load security events.';
+    throw new ApiError(response.status, code, message);
+  }
+
+  return Array.isArray(data?.events) ? data.events : [];
 }
