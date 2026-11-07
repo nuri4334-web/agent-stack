@@ -4,7 +4,7 @@ Security-first AI assistant for company data (Slack). Permission checks, secret 
 
 An open source system that gives company data (Slack first) to an AI assistant safely. Core principle: **even if the AI is tricked, nothing leaks.** Security comes from the architecture, not from the model behaving well.
 
-> Status: POC, in development (Sprint 1). Works only with fake data in the test Slack.
+> Status: POC, in development (Sprint 2). Works only with fake data in the test Slack.
 
 ## Folders
 
@@ -23,7 +23,7 @@ Every request that goes to the AI passes through the security gateway. Only the 
 
 1. Copy `.env.example` as `.env` and enter your own values. `.env` never goes into the repo.
    The channel lists (`ALLOWED_CHANNELS`, `BLOCKED_CHANNELS`) take Slack channel IDs, not names: see "Channel IDs" in [`server/README.md`](server/README.md).
-2. Server and frontend setup steps will be added in Sprint 1.
+2. Server setup and the demo: see [`server/README.md`](server/README.md). Frontend setup: see [`web/README.md`](web/README.md).
 
 ## Security rules
 
