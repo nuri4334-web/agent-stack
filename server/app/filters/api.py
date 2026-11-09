@@ -4,17 +4,52 @@
 (B) At question time, gateway step 4 (sanitization): mask_secrets, then Vault.mask; step 7 (presentation):
     Vault.restore. [REDACTED] is never restored.
 """
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Iterable, Sequence
 
-from .types import FilterResult
+from .normalize import normalize
+from .secrets import REDACTED, find_secrets
+from .types import NAME_KIND, PERSONAL_KINDS, SECRET_KINDS, FilterResult, Span
 
-REDACTED = "[REDACTED]"
+_GROUP = {kind: 0 for kind in SECRET_KINDS} | {kind: 1 for kind in PERSONAL_KINDS} | {NAME_KIND: 2}
+
+
+def choose_spans(spans: Iterable[Span]) -> list[Span]:
+    """Overlapping findings: the longer one wins; at equal length secret > personal data > name.
+
+    Among secrets of equal length a certain one beats a suspicious one, and a specific kind beats env_secret
+    (GITHUB_TOKEN=ghp_... counts as github_token). Returns non-overlapping spans by start.
+    """
+    def rank(s: Span):
+        return (-(s.end - s.start), _GROUP[s.kind], s.confidence != "certain", s.kind == "env_secret", s.start)
+
+    chosen: list[Span] = []
+    for span in sorted(set(spans), key=rank):
+        if all(span.end <= c.start or span.start >= c.end for c in chosen):
+            chosen.append(span)
+    return sorted(chosen, key=lambda s: s.start)
+
+
+def _replace(text: str, spans: Sequence[Span], placeholder: str) -> str:
+    for span in reversed(spans):
+        text = text[:span.start] + placeholder + text[span.end:]
+    return text
 
 
 def mask_secrets(text: str) -> FilterResult:
-    """Secrets replaced by [REDACTED]; counts by kind; alarm=True if a certain secret was found."""
-    # Skeleton (S3-01). Body: Musa, Thu 12 Nov (S3-09).
-    return FilterResult(text=text)
+    """Secrets replaced by [REDACTED]; counts by kind; alarm=True if a certain secret was found.
+
+    normalize -> find_secrets -> overlap rule -> [REDACTED]. The alarm looks at every certain finding, also one
+    that lost an overlap. An already masked [REDACTED] is never counted again.
+    """
+    clean = normalize(text)
+    found = find_secrets(clean)
+    chosen = choose_spans(found)
+    return FilterResult(
+        text=_replace(clean, chosen, REDACTED),
+        counts=dict(Counter(s.kind for s in chosen)),
+        alarm=any(s.confidence == "certain" for s in found),
+    )
 
 
 class Vault:
