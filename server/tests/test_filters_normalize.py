@@ -8,12 +8,12 @@ INVISIBLE = (
     [chr(c) for c in range(0x200B, 0x2010)]
     + [chr(c) for c in range(0x202A, 0x202F)]
     + [chr(c) for c in range(0x2060, 0x2065)]
-    + ["﻿"]
+    + ["\ufeff"]
 )
 
 
 def test_zero_width_space_inside_a_slack_token_is_removed():
-    hidden = "xo​xb-0000000000-0000000000000-EXAMPLE"
+    hidden = "xo\u200bxb-0000000000-0000000000000-EXAMPLE"
     assert normalize(hidden) == "xoxb-0000000000-0000000000000-EXAMPLE"
 
 
@@ -40,5 +40,5 @@ def test_characters_just_outside_the_ranges_stay(char):
 
 
 def test_normalize_is_idempotent():
-    once = normalize("x​y‮z﻿")
+    once = normalize("x\u200by\u202ez\ufeff")
     assert normalize(once) == once == "xyz"

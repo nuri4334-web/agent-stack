@@ -1,6 +1,7 @@
 """S3-01: the filter skeleton has the shared signatures and its empty bodies change nothing."""
 import ast
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,16 @@ def test_filter_package_does_not_shadow_the_standard_library():
 
     assert hasattr(std_secrets, "token_bytes")
     assert hasattr(std_types, "SimpleNamespace")
+
+
+# Invisible characters are written as escapes (\\u200b), never raw: a raw direction mark is flagged by GitHub as
+# hidden bidirectional Unicode, and an editor that silently removes it would break normalize.
+_RAW_INVISIBLE = re.compile("[\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u2064\\ufeff]")
+_SOURCES = sorted(FILTERS_DIR.glob("*.py")) + sorted((FILTERS_DIR.parents[1] / "tests").glob("test_filters_*.py"))
+
+
+@pytest.mark.parametrize("path", _SOURCES, ids=lambda p: p.name)
+def test_no_raw_invisible_characters_in_filter_sources(path):
+    lines = [i for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+             if _RAW_INVISIBLE.search(line)]
+    assert lines == [], f"{path.name}: raw invisible characters on lines {lines}; write them as \\uXXXX escapes"
