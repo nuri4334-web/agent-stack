@@ -231,6 +231,7 @@ def test_call_record_correct_and_has_no_text(sent):
     ("TIMEOUT", 504, "timeout"),
     ("PROVIDER_ERROR", 502, "provider_error"),
     ("QUOTA_EXCEEDED", 502, "provider_error"),
+    ("BILLING", 502, "provider_error"),
 ])
 def test_provider_error_record_and_502_504(monkeypatch, code, http, result):
     def raise_error(instruction, data):
