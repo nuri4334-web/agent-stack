@@ -3,7 +3,6 @@
 Each question passes through seven steps in order. In Sprint 1 most steps pass without
 doing anything; their places are fixed now so that later stages can fill them.
 """
-
 import logging
 import sqlite3
 import time
@@ -59,6 +58,7 @@ class RequestContext:
     input_tokens: int = 0
     output_tokens: int = 0
     security: SecuritySummary = field(default_factory=SecuritySummary)
+    answer_masked: int = 0  # secrets masked in the answer's second scan (logged on response_check only)
     step_durations_ms: dict[str, float] = field(default_factory=dict)
     stopped: bool = False  # if True, later steps (including the AI) do not run
     reason_code: str | None = None  # why the step stopped (API contract 11); handle_question writes it to the event
@@ -207,7 +207,7 @@ def response_check(c: RequestContext) -> None:
     cleaned = clean_answer(c.model_answer)
     c.model_answer = cleaned.text
     c.security.blocked += cleaned.links_removed + cleaned.images_removed
-    c.security.masked += sum(cleaned.secrets.values())
+    c.answer_masked = sum(cleaned.secrets.values())
 
 
 # --- 7. Presentation (Stage 3): name masks are opened, [REDACTED] stays.
@@ -235,7 +235,7 @@ def _write_step_event(c: RequestContext, step: str, duration_ms: float) -> None:
     extra_counts: dict[str, int] = {}
     if step == "response_check":
         extra_counts["blocked_count"] = c.security.blocked
-        extra_counts["masked_count"] = c.security.masked
+        extra_counts["masked_count"] = c.answer_masked
     try:
         with c.connection:
             write_event(

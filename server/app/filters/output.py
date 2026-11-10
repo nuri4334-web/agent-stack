@@ -8,11 +8,15 @@ from .normalize import normalize
 
 REMOVED_NOTE = "link removed"
 
-_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_URL_PART = r"\((?:[^()\s]|\([^()\s]*\))*\)"
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]" + _MD_URL_PART)
 _HTML_IMG = re.compile(r"<img\b[^>]*>", re.IGNORECASE | re.DOTALL)
 _HTML_LINK = re.compile(r"<a\b[^>]*>.*?</a>|<a\b[^>]*>", re.IGNORECASE | re.DOTALL)
-_MD_LINK = re.compile(r"\[([^\[\]]*)\]\([^)]*\)")
-_BARE_URL = re.compile(r"https?://[^\s<>()\"'\]]+", re.IGNORECASE)
+_MD_LINK = re.compile(r"\[([^\[\]]*)\]" + _MD_URL_PART)
+_BARE_URL = re.compile(
+    r"(?:https?://|(?<![:\w/])//(?=[a-z0-9])|(?<![\w/@.])www\.)[^\s<>\"'\]]+",
+    re.IGNORECASE,
+)
 _TRAILING_PUNCT = ".,;:!?"
 
 
@@ -22,6 +26,20 @@ class OutputResult:
     links_removed: int = 0
     images_removed: int = 0
     secrets: Mapping[str, int] = field(default_factory=dict)  # kind -> count of the second secret scan
+
+
+def _split_trailing_punct(raw: str) -> tuple[str, str]:
+    """Strips sentence punctuation and unbalanced closing parentheses from the end of a bare URL."""
+    end = len(raw)
+    while end > 0:
+        last = raw[end - 1]
+        if last in _TRAILING_PUNCT:
+            end -= 1
+        elif last == ")" and raw[:end].count(")") > raw[:end].count("("):
+            end -= 1
+        else:
+            break
+    return raw[:end], raw[end:]
 
 
 def clean_answer(text: str) -> OutputResult:
@@ -52,9 +70,7 @@ def clean_answer(text: str) -> OutputResult:
     def _replace_bare_url(match: re.Match[str]) -> str:
         nonlocal links_removed
         links_removed += 1
-        raw = match.group(0)
-        trimmed = raw.rstrip(_TRAILING_PUNCT)
-        suffix = raw[len(trimmed):]
+        _, suffix = _split_trailing_punct(match.group(0))
         return f"{REMOVED_NOTE}{suffix}"
 
     cleaned = _MD_IMAGE.sub(_replace_image, cleaned)

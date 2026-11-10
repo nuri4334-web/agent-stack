@@ -1,11 +1,8 @@
 """S3-03: output filter unit tests and gateway response_check integration tests."""
-from fastapi.testclient import TestClient
-
 from app import ai, gateway, settings
 from app.filters import output
 from app.filters.output import OutputResult, clean_answer
 from app.filters.types import FilterResult
-from app.main import app
 
 
 def test_markdown_image_is_completely_replaced():
@@ -54,6 +51,22 @@ def test_bare_http_and_https_urls_are_removed_keeping_sentence_punctuation():
         secrets={},
     )
     assert "example" not in result.text
+
+
+def test_protocol_relative_www_and_parenthesized_urls_are_removed():
+    text = (
+        "Links: //evil.example/leak, www.evil.example/path, "
+        "https://evil.example/Foo_(bar) and (see https://evil.example/in_parens)."
+    )
+    result = clean_answer(text)
+    assert result == OutputResult(
+        text="Links: link removed, link removed, link removed and (see link removed).",
+        links_removed=4,
+        images_removed=0,
+        secrets={},
+    )
+    assert "evil.example" not in result.text
+    assert "Foo" not in result.text
 
 
 def test_html_img_and_anchor_tags_are_removed():
@@ -133,3 +146,36 @@ def test_gateway_response_check_removes_links_and_records_blocked_count(client_a
     assert req_events[0]["decision"] == "passed"
     assert req_events[0]["blocked_count"] == 3
     assert gateway.NO_ACCESS_ANSWER not in body["answer"]
+
+
+def test_gateway_response_check_secret_in_answer_updates_event_only(client_as, monkeypatch):
+    def fake_mask_secrets(val: str) -> FilterResult:
+        return FilterResult(
+            text=val.replace("SECRET_IN_ANSWER", "[REDACTED]"),
+            counts={"slack_token": 1},
+            alarm=True,
+        )
+
+    monkeypatch.setattr(output, "mask_secrets", fake_mask_secrets)
+    monkeypatch.setattr(ai, "FAKE_FIXED_ANSWER", "Summary with SECRET_IN_ANSWER inside.")
+    monkeypatch.setattr(settings, "AI_PROVIDER", "fake")
+
+    ali_client = client_as("ali")
+    response = ali_client.post("/api/ask", json={"question": "#dev'i özetle"})
+    assert response.status_code == 200
+    body = response.json()
+
+    assert "SECRET_IN_ANSWER" not in body["answer"]
+    assert "[REDACTED]" in body["answer"]
+    assert body["security"]["masked"] == 0
+
+    admin_client = client_as("admin")
+    events_resp = admin_client.get("/api/admin/events")
+    assert events_resp.status_code == 200
+    req_events = [
+        e for e in events_resp.json()["events"]
+        if e["request_id"] == body["request_id"] and e["step"] == "response_check"
+    ]
+    assert len(req_events) == 1
+    assert req_events[0]["masked_count"] == 1
+    assert req_events[0]["blocked_count"] == 0
