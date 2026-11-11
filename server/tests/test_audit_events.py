@@ -179,6 +179,7 @@ def test_no_slack_data_writes_three_events(fixture_accounts, sent_to_ai):
     ("TIMEOUT", 504, "TIMEOUT"),
     ("PROVIDER_ERROR", 502, "PROVIDER_ERROR"),
     ("QUOTA_EXCEEDED", 502, "PROVIDER_ERROR"),
+    ("BILLING", 502, "PROVIDER_ERROR"),
 ])
 def test_ai_error_writes_five_events_and_keeps_502_504(client_as, monkeypatch, code, http, reason):
     monkeypatch.setattr(ai, "ask", _raise_ai_error(code))
