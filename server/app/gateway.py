@@ -16,10 +16,11 @@ from .accounts.rules import SignedInPerson
 from .audit.event_limit import UnauthenticatedEventLimiter, unauthenticated_event_limiter
 from .audit.log import AuditWriteError, write_ai_call, write_event
 from .audit.rules import gateway_event
-from .schemas import AskResponse, SecuritySummary, SourceMessage
 from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id
 from .data_selection.selection import member_channel_ids, question_time_channels, select_messages
 from .database.schema import connect, create_tables
+from .filters.output import clean_answer
+from .schemas import AskResponse, SecuritySummary, SourceMessage
 
 log = logging.getLogger("agentstack")
 
@@ -59,6 +60,7 @@ class RequestContext:
     input_tokens: int = 0
     output_tokens: int = 0
     security: SecuritySummary = field(default_factory=SecuritySummary)
+    answer_masked: int = 0  # secrets masked in the answer's second scan (logged on response_check only)
     step_durations_ms: dict[str, float] = field(default_factory=dict)
     stopped: bool = False  # if True, later steps (including the AI) do not run
     reason_code: str | None = None  # why the step stopped (API contract 11); handle_question writes it to the event
@@ -204,7 +206,10 @@ def _write_call_record(
 
 # --- 6. Response check (Stage 3-4): removing external links/images, second secret scan.
 def response_check(c: RequestContext) -> None:
-    pass
+    cleaned = clean_answer(c.model_answer)
+    c.model_answer = cleaned.text
+    c.security.blocked += cleaned.links_removed + cleaned.images_removed
+    c.answer_masked = sum(cleaned.secrets.values())
 
 
 # --- 7. Presentation (Stage 3): name masks are opened, [REDACTED] stays.
@@ -229,19 +234,27 @@ def _write_step_event(c: RequestContext, step: str, duration_ms: float) -> None:
     If it cannot be written the request stops (the safe side): no later step runs, the answer is 500.
     The log gets only the step, the request id and the error type.
     """
+    extra_counts: dict[str, int] = {}
+    if step == "response_check":
+        extra_counts["blocked_count"] = c.security.blocked
+        extra_counts["masked_count"] = c.answer_masked
     try:
         with c.connection:
-            write_event(c.connection, **gateway_event(
-                step,
-                stopped=c.stopped,
-                reason_code=c.reason_code,
-                message_count=len(c.selected_messages),
-                person_id=c.person.id if c.person else None,
-                channel_id=c.channel_id,
-                request_id=c.request_id,
-                created_at=c.now().isoformat(),
-                duration_ms=duration_ms,
-            ))
+            write_event(
+                c.connection,
+                **gateway_event(
+                    step,
+                    stopped=c.stopped,
+                    reason_code=c.reason_code,
+                    message_count=len(c.selected_messages),
+                    person_id=c.person.id if c.person else None,
+                    channel_id=c.channel_id,
+                    request_id=c.request_id,
+                    created_at=c.now().isoformat(),
+                    duration_ms=duration_ms,
+                ),
+                **extra_counts,
+            )
     except Exception as error:
         log.error("Failed to write audit event (step %s, request %s): %s", step, c.request_id, type(error).__name__)
         raise AuditWriteError() from error
