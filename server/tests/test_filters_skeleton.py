@@ -46,8 +46,12 @@ def test_filter_result_masked_is_the_sum_of_counts():
 
 def test_rule_skeletons_find_nothing():
     assert secrets.find_secrets(TEXT) == []
-    assert personal.find_personal(TEXT) == []
-    assert names.find_names(TEXT, ["Deniz Aydın"]) == []
+
+
+def test_personal_and_name_rules_return_shared_spans():
+    # S3-07 filled these two rules; their own tests are test_filters_personal.py and test_filters_names.py.
+    assert [(s.kind, s.confidence) for s in personal.find_personal(TEXT)] == [("email", "certain")]
+    assert [(s.kind, s.start, s.end) for s in names.find_names(TEXT, ["Deniz Aydın"])] == [("person", 0, 5)]
 
 
 def test_mask_secrets_skeleton_returns_the_text_unchanged():
