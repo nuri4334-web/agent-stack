@@ -63,6 +63,15 @@ def ask(instruction: str, data: str) -> AIResponse:
 
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
 
+    if response.status_code == 402:
+        # Billing or prepaid credit problem: waiting does not help. The response body is not read,
+        # so no project name, key or provider text can reach the message.
+        raise AIError(
+            code="BILLING",
+            message="The AI provider rejected the request: billing or quota. "
+                    "Ask the administrator to check the AI account.",
+        )
+
     if response.status_code == 429:
         raise AIError(
             code="QUOTA_EXCEEDED",
