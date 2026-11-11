@@ -17,11 +17,12 @@ _GROUP = {kind: 0 for kind in SECRET_KINDS} | {kind: 1 for kind in PERSONAL_KIND
 def choose_spans(spans: Iterable[Span]) -> list[Span]:
     """Overlapping findings: the longer one wins; at equal length secret > personal data > name.
 
-    Among secrets of equal length a certain one beats a suspicious one, and a specific kind beats env_secret
-    (GITHUB_TOKEN=ghp_... counts as github_token). Returns non-overlapping spans by start.
+    Among secrets of equal length a specific kind beats env_secret (one value is counted once, under its most specific
+    kind: GITHUB_TOKEN=ghp_... counts as github_token), then a certain one beats a suspicious one.
+    Returns non-overlapping spans by start.
     """
     def rank(s: Span):
-        return (-(s.end - s.start), _GROUP[s.kind], s.confidence != "certain", s.kind == "env_secret", s.start)
+        return (-(s.end - s.start), _GROUP[s.kind], s.kind == "env_secret", s.confidence != "certain", s.start)
 
     chosen: list[Span] = []
     for span in sorted(set(spans), key=rank):

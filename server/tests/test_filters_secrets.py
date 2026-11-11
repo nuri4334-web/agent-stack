@@ -21,6 +21,7 @@ AWS_ID = "AKIAIOSFODNN7EXAMPLE"
 AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 GOOGLE = "AIzaSyEXAMPLE" + "0" * 26
 OPENAI = "sk-proj-" + "EXAMPLE" + "0" * 67 + "T3BlbkFJ" + "0" * 67 + "EXAMPLE"
+OPENAI_UNMARKED = "sk-proj-" + "EXAMPLE" + "0" * 40
 ANTHROPIC = "sk-ant-api03-" + "EXAMPLE" + "0" * 86 + "AA"
 PRIVATE_KEY = (
     "-----BEGIN OPENSSH PRIVATE KEY-----\n"
@@ -44,10 +45,10 @@ def same(a: str, b: str) -> bool:
 @pytest.mark.parametrize("kind, value", [
     ("slack_token", SLACK_BOT), ("slack_token", SLACK_USER), ("slack_token", SLACK_APP),
     ("github_token", GITHUB_CLASSIC), ("github_token", GITHUB_FINE),
-    ("aws_key", AWS_ID), ("google_key", GOOGLE), ("openai_key", OPENAI), ("anthropic_key", ANTHROPIC),
-    ("private_key", PRIVATE_KEY), ("bearer_token", JWT),
+    ("aws_key", AWS_ID), ("google_key", GOOGLE), ("openai_key", OPENAI), ("openai_key", OPENAI_UNMARKED),
+    ("anthropic_key", ANTHROPIC), ("private_key", PRIVATE_KEY), ("bearer_token", JWT),
 ], ids=["slack-bot", "slack-user", "slack-app", "github-classic", "github-fine", "aws-id", "google", "openai",
-        "anthropic", "private-key", "jwt"])
+        "openai-unmarked", "anthropic", "private-key", "jwt"])
 def test_certain_secret_in_a_message_is_masked_with_alarm(kind, value):
     r = mask_secrets(f"şuna bak: {value} tamam mı?")
     assert not leaks(r.text, value)
@@ -62,6 +63,8 @@ def test_certain_secret_in_a_message_is_masked_with_alarm(kind, value):
     "AKIA ile başlayan anahtarlar AWS'ye ait: AKIA0000000000000",
     "AIza önekli Google anahtarları",
     "sk-proj-short anahtarı denedim",
+    "sk-proj-" + "a" * 20 + " (kısa, işaretsiz)",
+    "sk-" + "A1b2C3d4" * 6 + " işaretsiz ve öneksiz",
     "sk-ant-api03-short",
     "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAEXAMPLE\n-----END PUBLIC KEY-----",
     "-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaEXAMPLE\n-----END CERTIFICATE-----",
@@ -102,10 +105,10 @@ def test_database_address_masks_only_the_password():
     (f"export API_TOKEN='{DB_SECRET}'", f"export API_TOKEN='{REDACTED}'"),
     ('SMTP_PASS="ornek sifre 2026"', f'SMTP_PASS="{REDACTED}"'),
 ])
-def test_env_line_masks_only_the_value(line, masked):
+def test_env_line_masks_only_the_value_and_alarms(line, masked):
     r = mask_secrets(line)
     assert same(r.text, masked)
-    assert (dict(r.counts), r.alarm) == ({"env_secret": 1}, False)
+    assert (dict(r.counts), r.alarm) == ({"env_secret": 1}, True)  # decision N5: a pasted .env secret alarms
 
 
 @pytest.mark.parametrize("line", [
@@ -188,7 +191,8 @@ def test_masking_twice_counts_nothing_new():
 
 
 def test_only_suspicious_findings_give_no_alarm():
-    assert mask_secrets(f"JWT_SECRET={ENV_SECRET}").alarm is False
+    r = mask_secrets(f"aws_secret_access_key: {AWS_SECRET}")
+    assert (dict(r.counts), r.alarm) == ({"aws_key": 1}, False)
 
 
 def test_certain_secret_inside_a_longer_env_value_still_gives_the_alarm():
@@ -206,7 +210,7 @@ def test_find_secrets_spans_point_at_the_value_only():
     text = f"DB_PASSWORD={DB_SECRET}"
     spans = find_secrets(text)
     assert [(s.start, s.end, s.kind, s.confidence) for s in spans] == [
-        (len("DB_PASSWORD="), len(text), "env_secret", "suspicious"),
+        (len("DB_PASSWORD="), len(text), "env_secret", "certain"),
     ]
 
 
@@ -247,12 +251,16 @@ def test_equal_length_secret_beats_personal_beats_name():
     assert choose_spans(spans[:2]) == [Span(0, 5, "email", "certain")]
 
 
-def test_equal_length_certain_and_specific_win_among_secrets():
+def test_equal_length_specific_then_certain_win_among_secrets():
     assert choose_spans([Span(0, 5, "env_secret", "suspicious"), Span(0, 5, "aws_key", "suspicious")]) == [
         Span(0, 5, "aws_key", "suspicious"),
     ]
     assert choose_spans([Span(0, 5, "aws_key", "suspicious"), Span(0, 5, "google_key", "certain")]) == [
         Span(0, 5, "google_key", "certain"),
+    ]
+    # The most specific kind wins even over a certain env_secret: AWS_SECRET_ACCESS_KEY=... counts as aws_key.
+    assert choose_spans([Span(0, 5, "env_secret", "certain"), Span(0, 5, "aws_key", "suspicious")]) == [
+        Span(0, 5, "aws_key", "suspicious"),
     ]
 
 

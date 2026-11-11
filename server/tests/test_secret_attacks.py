@@ -24,7 +24,6 @@ from app.slack_connector.sync import sync_slack
 from tests import attack_samples as s
 from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, message, sample_slack, ts
 
-PENDING_S3_09 = pytest.mark.xfail(strict=True, raises=AssertionError, reason="S3-09 secret rules (PR #24)")
 PENDING_S3_05 = pytest.mark.xfail(
     strict=True, raises=AssertionError, reason="S3-05 sync/seed filter + S3-09 secret rules",
 )
@@ -45,7 +44,6 @@ def _reset_counter():
 
 # === Group 1: the filter API, secrets (S3-09) =======================================================================
 
-@PENDING_S3_09
 @pytest.mark.parametrize("kind", SECRET_KINDS)
 def test_mask_secrets_hides_each_secret_kind(kind):
     """Each of the 10 secret kinds, in its typical form: masked, counted once under its kind, alarm (decision B2)."""
@@ -59,7 +57,6 @@ def test_mask_secrets_hides_each_secret_kind(kind):
     assert result.alarm is True, f"no alarm for {kind}"
 
 
-@PENDING_S3_09
 def test_key_split_by_invisible_character():
     """A zero-width space inside the token must not hide it from the rules (normalize runs first)."""
     split = s.SLACK_TOKEN[:2] + "\u200b" + s.SLACK_TOKEN[2:]
@@ -70,7 +67,6 @@ def test_key_split_by_invisible_character():
     assert result.alarm is True, "no alarm"
 
 
-@PENDING_S3_09
 def test_key_in_the_middle_of_a_sentence():
     """A token inside a sentence: masked, the words around it stay."""
     result = mask_secrets(f"deploy yine düştü, {s.GITHUB_TOKEN} ile denedim ama olmadı")
@@ -81,7 +77,6 @@ def test_key_in_the_middle_of_a_sentence():
     assert result.alarm is True, "no alarm"
 
 
-@PENDING_S3_09
 def test_key_inside_code_block():
     """A token inside a ``` code block is masked too."""
     result = mask_secrets(f"şunu çalıştır:\n```\nexport GITHUB_TOKEN={s.GITHUB_TOKEN}\n```")
@@ -90,7 +85,6 @@ def test_key_inside_code_block():
     assert result.alarm is True, "no alarm"
 
 
-@PENDING_S3_09
 def test_env_block_with_several_lines():
     """A pasted .env block: both secret values masked, harmless setting lines unchanged."""
     text = (
@@ -111,7 +105,6 @@ def test_env_block_with_several_lines():
     assert result.alarm is True, "no alarm"
 
 
-@PENDING_S3_09
 def test_database_url_password_counted_once():
     """Interface Clarification 1: the password in DATABASE_URL is one value, counted once as db_password."""
     result = mask_secrets(s.SECRET_SAMPLES["db_password"].text)
@@ -122,7 +115,6 @@ def test_database_url_password_counted_once():
     assert user_and_host_kept, "user or host changed"
 
 
-@PENDING_S3_09
 def test_masking_twice_does_not_count_again():
     """Interface Clarification 2: mask_secrets does not count an existing [REDACTED] again."""
     first = mask_secrets(f"token: {s.SLACK_TOKEN}")

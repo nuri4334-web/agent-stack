@@ -1,6 +1,7 @@
 """Secret rules (S3-09): the S1-11 catalog (S1-S14) as code; S15 (an unlabelled random string) is weak, never returned.
 
-Certain: a known prefix or structure. Suspicious: a name and a value together (an .env line, aws_secret_access_key).
+Certain: a known prefix or structure, and an .env line (product decision N5: a pasted .env secret also alarms).
+Suspicious: a name and a value outside an .env line (aws_secret_access_key = ...).
 Only the value is a span: "DB_PASSWORD=[REDACTED]", "postgres://user:[REDACTED]@host".
 A value that is already [REDACTED] is never found again.
 """
@@ -27,6 +28,9 @@ _CERTAIN_TOKENS = [
     ("google_key", re.compile(_BEFORE + r"AIza[0-9A-Za-z_\-]{35}" + _AFTER)),
     ("openai_key", re.compile(
         _BEFORE + r"sk-(?:(?:proj|svcacct|admin)-)?[A-Za-z0-9_\-]{20,256}T3BlbkFJ[A-Za-z0-9_\-]{20,256}" + _AFTER)),
+    # A project, service account or admin key is certain also without the T3BlbkFJ mark, if it is long enough
+    # (at least 40 characters with the prefix). A plain "sk-..." still needs the mark (too many look-alikes).
+    ("openai_key", re.compile(_BEFORE + r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{32,512}" + _AFTER)),
     ("anthropic_key", re.compile(_BEFORE + r"sk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_\-]{80,256}" + _AFTER)),
     # A block without its END line (pasted only partly) is masked to the end of the text.
     ("private_key", re.compile(
@@ -73,7 +77,7 @@ def _env_secrets(text: str) -> list[Span]:
                 or REDACTED in value
                 or _NOT_A_SECRET_VALUE.fullmatch(value) or _PLAIN_URL.fullmatch(value)):
             continue
-        spans.append(Span(match.start(group), match.end(group), "env_secret", "suspicious"))
+        spans.append(Span(match.start(group), match.end(group), "env_secret", "certain"))
     return spans
 
 
