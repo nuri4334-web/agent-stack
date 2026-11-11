@@ -2,6 +2,7 @@
 
 Messages have no raw text column; the audit log has no message text or free text.
 Passwords are kept only as a scrypt hash, session tokens only as a SHA-256 hash (S2-02).
+Each message keeps how many secrets of each kind were masked before it was written (secret_counts, S3-05); never a value.
 Details: docs/data-model.md
 """
 import sqlite3
@@ -10,10 +11,10 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
-# Lowest SQLite version needed for STRICT tables.
-MIN_SQLITE_VERSION = (3, 37, 0)
+# Lowest SQLite version: STRICT tables (3.37) and the built-in JSON functions of the secret_counts check (3.38).
+MIN_SQLITE_VERSION = (3, 38, 0)
 
 # Time columns have no default: the caller always gives the time (ISO 8601 text).
 SCHEMA_SQL = """
@@ -93,6 +94,9 @@ CREATE TABLE IF NOT EXISTS messages (
     sent_at        TEXT NOT NULL,
     clean_text     TEXT NOT NULL,
     is_suspicious  INTEGER CHECK (is_suspicious IS NULL OR is_suspicious IN (0, 1)),
+    secret_counts  TEXT NOT NULL DEFAULT '{}' CHECK (
+                       json_valid(secret_counts) AND json_type(secret_counts) = 'object'
+                   ),
     UNIQUE (channel_id, ts)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS messages_channel_sent_at ON messages (channel_id, sent_at);
@@ -154,7 +158,7 @@ def connect(path: str | Path = settings.DATABASE_PATH) -> sqlite3.Connection:
     """Opens a connection and turns on foreign key checks. Tests pass ":memory:"."""
     if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
         raise RuntimeError(
-            f"SQLite version is too old ({sqlite3.sqlite_version}); at least 3.37.0 is needed."
+            f"SQLite version is too old ({sqlite3.sqlite_version}); at least 3.38.0 is needed."
         )
     connection = sqlite3.connect(path)
     connection.execute("PRAGMA foreign_keys = ON")

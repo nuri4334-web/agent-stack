@@ -58,8 +58,14 @@ Inside `server/`, with the venv:
 ```
 
 `--days` default is 30; the demo messages were written on 22 October 2026, so to get them in a real sync after about 21 November, increase `--days` or use the seed.
-The schema version is 4. If you have an older local database, delete `server/agentstack.db`, run `seed load` again
+The schema version is 5 (S3-05). If you have an older local database, delete `server/agentstack.db`, run `seed load` again
 and create the demo accounts again (see "Accounts").
+Sync and `seed load` mask secrets before writing (`[REDACTED]`). To prove that the database keeps no raw secret
+(read only; exit 0 clean, 1 found, 2 could not check; it prints only message ids and kinds, never a value):
+
+```
+.venv/Scripts/python -m app.database.check_db
+```
 Details: [`docs/data-model.md`](../docs/data-model.md) ("Slack sync and seed data").
 
 ## Channel IDs
@@ -185,10 +191,12 @@ For a demo on a single computer, in this order. Run the commands inside `server/
    .venv\Scripts\python -m app.accounts link-slack --username ali --slack-id U0CA5HH3M1V
    .venv\Scripts\python -m app.accounts link-slack --username ayse --slack-id U0CAQKKLXTN
    .venv\Scripts\python -m app.accounts list
+   .venv\Scripts\python -m app.database.check_db
    ```
 
    Expected: `Loaded: 3 channels (allowed 3, blocked 0), 8 users, 20 memberships, 39 messages.` (`blocked 0` is right: the
-   seed has no ik.) In `list`, ali and ayse have a Slack ID and admin has `-`.
+   seed has no ik.) In `list`, ali and ayse have a Slack ID and admin has `-`. `check_db` ends with `0 raw secrets.`
+   (exit code 0).
 
 4. **Server and screen.** One server process, without `--reload` or `--workers`:
 

@@ -7,6 +7,8 @@ Run (inside server/):
 Only allowed channels, their memberships and messages, and the users they mention go into the file.
 The audit log, AI calls, people and linked accounts do not.
 Secret check: the token used for syncing cannot appear in the file; every text matching a token pattern must contain "EXAMPLE".
+Load masks secrets like sync does (sanitize, S3-05): the file may contain fake keys, the database never keeps them.
+The per-kind counts are not in the file (seed version 2); they are computed again when loading.
 """
 import argparse
 import json
@@ -20,6 +22,7 @@ from pathlib import Path
 from .. import settings
 from ..database.rules import ALLOWED, BLOCKED, blocked_list_error, channel_list_warnings, channel_status
 from ..database.schema import connect, create_tables
+from . import sanitize
 from .transform import is_valid_ts
 
 FORMAT = "agentstack-slack-seed"
@@ -195,6 +198,18 @@ def load_seed(
         "channels": 0, "allowed_channels": 0, "blocked_channels": 0, "users": 0, "memberships": 0, "messages": 0,
     }
     allowed_ids = set()
+    # Secrets are masked before the transaction, the same way as in sync: a failing filter loads nothing.
+    to_load = {
+        c["slack_id"] for c in data["channels"] if channel_status(c["slack_id"], allowed, blocked) == ALLOWED
+    }
+    try:
+        cleaned = []
+        for m in data["messages"]:
+            if m["channel_id"] in to_load:
+                result = sanitize.sanitize(m["clean_text"])
+                cleaned.append(m | {"clean_text": result.text, "secret_counts": sanitize.counts_json(result)})
+    except Exception as error:
+        raise SeedError(f"The secret filter failed ({type(error).__name__}); nothing was loaded.") from None
     try:
         with connection:
             for u in data["slack_users"]:
@@ -224,11 +239,11 @@ def load_seed(
                         (m["channel_id"], m["slack_user_id"], updated_at),
                     )
                     counts["memberships"] += 1
-            for m in data["messages"]:
+            for m in cleaned:
                 if m["channel_id"] in allowed_ids:
                     connection.execute(
-                        "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) "
-                        "VALUES (:channel_id, :ts, :author_id, :sent_at, :clean_text)",
+                        "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text, secret_counts) "
+                        "VALUES (:channel_id, :ts, :author_id, :sent_at, :clean_text, :secret_counts)",
                         m,
                     )
                     counts["messages"] += 1

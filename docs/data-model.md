@@ -4,8 +4,8 @@ The server's SQLite tables. Sprint 1 · S1-03; accounts and sessions: Sprint 2 �
 
 - The database is opened with Python's own `sqlite3` module; there is no extra package, ORM or migration tool.
 - The file location is the `DATABASE_PATH` setting in `.env` (a relative path is resolved from the repo root). Tests use an in-memory (`:memory:`) database or a seeded database in a temporary folder; they never touch the real file.
-- The schema version is kept in `PRAGMA user_version`; the current version is **4** (S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
-- All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.37.0 is needed).
+- The schema version is kept in `PRAGMA user_version`; the current version is **5** (S3-05: `messages.secret_counts`; version 4, S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
+- All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.38.0 is needed: 3.37 for `STRICT`, 3.38 for the built-in JSON functions of the `secret_counts` check).
 - Time fields are ISO 8601 text (e.g. `2026-10-22T14:05:00+03:00`). The database does not fill in the time itself; the writing code always gives the time.
 - There is no cascading delete (`ON DELETE CASCADE`).
 
@@ -103,6 +103,7 @@ Messages in channels; only sanitized text is kept, there is no raw text field.
 | `sent_at` | When the message was written. |
 | `clean_text` | Sanitized message text; the only field where message text is kept. |
 | `is_suspicious` | 1 if the message was found suspicious, 0 if not; empty (NULL) if not checked yet. |
+| `secret_counts` | How many secrets of each kind were masked (`[REDACTED]`) in this message before it was written (S3-05): a JSON object, kind → count, e.g. `{"env_secret":1,"slack_token":2}`; `{}` if none (also the default). Only the 10 secret kinds and counts of at least 1; never a value. Read by the gateway's sanitization step for `security.masked` and `masked_kinds` (S3-08). |
 
 The same `ts` cannot be written twice in the same channel.
 
@@ -145,6 +146,7 @@ Reason codes of Slack sync:
 | `BOT_NOT_IN_CHANNEL` | `error` | The channel is allowed but the bot is not in it; no request to Slack was made for that channel. |
 | `CHANNEL_FETCH_FAILED` | `error` | The channel's members or messages could not be fetched (e.g. Slack `not_in_channel`, too many requests); old rows of the channel were not touched. |
 | `CHANNEL_WRITE_FAILED` | `error` | The channel's data could not be written to the database; that channel's transaction was rolled back. |
+| `CHANNEL_FILTER_FAILED` | `error` | The secret filter failed on a message of the channel (S3-05); nothing of that channel was written, never a raw text. The screen shows only the error type. |
 | `SOME_CHANNELS_FAILED` | `ok` | Summary row: at least one channel failed. If there is no error, `reason_code` is empty. |
 
 Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; it only appears on the screen.
@@ -248,7 +250,7 @@ Sync rules:
 - If the bot is not in an allowed channel, no request is made for that channel and a `BOT_NOT_IN_CHANNEL` record is written.
 - The member list of every allowed channel is renewed in one transaction: a membership row no longer in Slack is deleted, the `updated_at` of the others is renewed.
 - Only people's plain messages are written: every message with a subtype (`subtype`) (joined the channel, bot message, channel renamed, reply sent from a thread to the channel, etc.), a message with no author or an empty text is skipped. The screen shows the number skipped per channel and the breakdown of reasons (e.g. `3 skipped: channel_join 3`); this breakdown is not written to the audit log.
-- `sanitize.sanitize()` is called right before a message is written to the database (for now it does not change the text; the filter is connected in Stage 3).
+- `sanitize.sanitize()` is called right before a message is written to the database (S3-05): it masks secrets with `mask_secrets` (`[REDACTED]`) and the per-kind counts go to `secret_counts`. Personal data and names are not masked here (only per request, in the gateway). If the filter fails on a message, nothing of that channel is written (`CHANNEL_FILTER_FAILED`). The sync summary and the audit row do not show these counts (`masked_count` of `slack_sync` stays 0, API contract 9).
 - The same message (`channel_id` + `ts`) is not written twice; running the command again does not duplicate messages.
 - If Slack says "too many requests" (HTTP 429), it waits for `Retry-After` (one wait is at most 120 seconds) and tries at most 5 times.
 - `--days` default is 30 (minimum 1, maximum 365). The demo messages were written on 22 October 2026; to get them in a real sync after about 21 November, increase `--days` or use the seed.
@@ -259,7 +261,19 @@ Seed data, default file `demo-data/slack-seed.json`:
 - JSON, UTF-8, LF. Fields: `format` (`agentstack-slack-seed`), `version` (2), `channels` (`slack_id`, `name`, `is_private`), `slack_users` (`slack_id`, `display_name`, `real_name`, `is_bot`), `channel_memberships` (`channel_id`, `slack_user_id`), `messages` (`channel_id`, `ts`, `author_id`, `sent_at`, `clean_text`). The loader accepts only version 2.
 - Only allowed channels, their memberships and messages, and the users these rows mention go in. The audit log, AI calls, people, linked accounts, `status`, `updated_at` and `is_suspicious` do not.
 - Secret check (when writing and reading): the token used for syncing cannot appear in the file; every text matching the `xox?-`, `ghp_`, `AIza`, `AKIA` patterns must contain `EXAMPLE`. A file that fails the check is not written or loaded; the error message shows only the name of the pattern.
+- `load` masks secrets the same way as sync (S3-05): the file may contain fake keys (the `.env` message of `#dev`), the database never keeps them; `secret_counts` is computed while loading (the file has no counts). If the filter fails, nothing is loaded (exit code 1). `export` writes the text as stored, so an export of a masked database has `[REDACTED]` and loses the counts when loaded again.
 - `load` loads only into a database whose Slack tables are empty. The channel status is computed again from the channel id with the loader's `ALLOWED_CHANNELS` and `BLOCKED_CHANNELS` lists (the seed file has no status); memberships and messages of a channel that comes out `excluded` or `blocked` are not loaded. The same list checks as in sync apply (an invalid `BLOCKED_CHANNELS` value stops `load`, exit code 2, nothing is loaded).
+
+Raw secret check (S3-05), the proof that the database keeps no secret:
+
+```powershell
+.venv/Scripts/python -m app.database.check_db [--db PATH]
+```
+
+- Scans every `messages.clean_text` (the only column with message text) with the same secret rules as sync and load (`find_secrets` on the normalized text). Every finding counts, certain or suspicious.
+- Opens the database read only; it never creates, changes or fixes anything. To fix a finding, delete the database and run `seed load` or sync again.
+- Prints only `message <id>: <kind>` per finding and a last line (`0 raw secrets.` or e.g. `2 raw secrets in 1 message.`); never a value or message text.
+- Exit codes: 0 no raw secret, 1 at least one, 2 the check could not run (no database file, schema version not the code's, a failing rule: `The secret check failed (<error type>).`, wrong usage). It never prints `0 raw secrets.` when the check did not run.
 
 ## Data selection (S1-05)
 
@@ -282,7 +296,8 @@ Code: `server/app/data_selection/`. The gateway's step 3 (`gateway.data_selectio
 
 - A message edited in Slack is not updated in the database; a deleted message stays in the database (fixed with `--from-scratch`).
 - If a channel's member list cannot be fetched, the channel's old memberships stay; how old they are can be seen from `updated_at`.
-- `sanitize()` does not change the text for now: until Stage 3, `clean_text` is actually the text in Slack.
+- `sanitize()` masks only what the secret rules (S3-09) find; until they are merged, `clean_text` is the text in Slack and `secret_counts` is `{}`.
+- The seed file (version 2) has no `secret_counts`: a seed exported from a masked database loses the counts when loaded.
 - The foreign key check works only on a connection opened with `connect()`; code that opens the database another way (`sqlite3.connect`) loses this check.
 - The value list of `audit_events.step` (without `slack_sync`, `login`, `logout`) matches `gateway.STEPS` by hand; if a step is added to the gateway, the schema must be updated too (a test catches the difference).
 - Thread replies, attachments and files are out of scope.
