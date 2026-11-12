@@ -64,8 +64,17 @@ def test_vault_skeleton_masks_and_restores_nothing():
     assert vault.restore(TEXT) == TEXT
 
 
-def test_detect_skeleton_is_not_suspicious():
-    assert injection.detect(TEXT) == injection.InjectionResult(suspicious=False, score=0.0)
+def test_detect_keeps_the_shared_result_and_fails_closed_without_a_model(monkeypatch):
+    # S3-10 filled the detector; its own tests are test_filters_injection.py.
+    def missing():
+        raise OSError("model not in the local cache")
+
+    injection._reset_for_tests()
+    monkeypatch.setattr(injection, "_loader", missing)
+    try:
+        assert injection.detect(TEXT) == injection.InjectionResult(suspicious=True, score=injection.NO_SCORE)
+    finally:
+        injection._reset_for_tests()
 
 
 def test_clean_answer_skeleton_returns_the_text_unchanged():
