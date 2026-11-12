@@ -92,7 +92,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -105,13 +105,13 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 5")
+    connection.execute("PRAGMA user_version = 6")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()
 
 
-@pytest.mark.parametrize("old_version", [1, 2, 3])
+@pytest.mark.parametrize("old_version", [1, 2, 3, 4])
 def test_older_schema_version_is_rejected(old_version):
     connection = connect(":memory:")
     connection.execute(f"PRAGMA user_version = {old_version}")
@@ -133,7 +133,9 @@ def test_foreign_keys_on(db):
 
 def test_messages_have_no_raw_text_column(db):
     columns = _columns(db, "messages")
-    assert columns == {"id", "channel_id", "ts", "author_id", "sent_at", "clean_text", "is_suspicious"}
+    assert columns == {
+        "id", "channel_id", "ts", "author_id", "sent_at", "clean_text", "is_suspicious", "secret_counts",
+    }
     assert not any("ham" in s or "raw" in s for s in columns)
 
 

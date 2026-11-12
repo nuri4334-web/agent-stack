@@ -167,7 +167,7 @@ RAW_SECRET_SHAPES = {
     "google_key": re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
     "sk_key": re.compile(r"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}"),
     "private_key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    "url_password": re.compile(r"[a-z][a-z0-9+.-]*://[^:\s/@]+:[^@\s]+@"),
+    "url_password": re.compile(r"[a-z][a-z0-9+.-]*://[^:\s/@]+:(?!\[REDACTED\]@)[^@\s]+@"),
     "bearer_token": re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}"),
 }
 

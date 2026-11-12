@@ -2,6 +2,7 @@ from datetime import datetime
 
 import pytest
 
+from app.filters.types import FilterResult
 from app.slack_connector import sanitize
 from app.data_selection.selection import select_messages
 from app.slack_connector.sync import _sync_channel, run_command, print_summary, sync_slack
@@ -265,9 +266,10 @@ def test_messages_with_subtype_are_skipped(db):
 
 
 def test_sanitize_called_before_writing(db, monkeypatch):
-    monkeypatch.setattr(sanitize, "sanitize", lambda text: "[CLEAN]")
+    monkeypatch.setattr(sanitize, "sanitize", lambda text: FilterResult("[CLEAN]", {"slack_token": 1}))
     _sync(db, sample_slack())
     assert {s[0] for s in db.execute("SELECT clean_text FROM messages")} == {"[CLEAN]"}
+    assert {s[0] for s in db.execute("SELECT secret_counts FROM messages")} == {'{"slack_token":1}'}
 
 
 def test_data_of_channel_removed_from_allowlist_is_deleted(db):

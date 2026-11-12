@@ -24,9 +24,6 @@ from app.slack_connector.sync import sync_slack
 from tests import attack_samples as s
 from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, message, sample_slack, ts
 
-PENDING_S3_05 = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="S3-05 sync/seed filter + S3-09 secret rules",
-)
 PENDING_S3_08 = pytest.mark.xfail(
     strict=True, raises=AssertionError, reason="S3-08 sanitization step + S3-09 secret rules",
 )
@@ -133,7 +130,6 @@ def test_existing_redacted_mark_is_not_counted():
 
 # === Group 2: Slack sync and seed (S3-05) ===========================================================================
 
-@PENDING_S3_05
 def test_seed_secrets_are_masked_in_database(_temporary_database):
     """After the seed load of conftest: no raw secret shape in any table, and #dev has a [REDACTED] (the .env
     message of the demo seed). The seed file is never read by the test, only the loaded database."""
@@ -157,7 +153,6 @@ def memory_db():
     connection.close()
 
 
-@PENDING_S3_05
 @pytest.mark.parametrize("kind", SECRET_KINDS)
 def test_synced_secret_is_masked_before_storing(memory_db, kind):
     """A Slack message with a secret is synced: the value is in no table, the message is stored with [REDACTED]."""
@@ -176,7 +171,6 @@ def test_synced_secret_is_masked_before_storing(memory_db, kind):
     assert has_mask, f"no [REDACTED] for {kind}"
 
 
-@PENDING_S3_05
 def test_seed_load_masks_secrets(memory_db):
     """A seed with secrets in clean_text (e.g. an old export) is loaded: the values are in no table."""
     data = {
@@ -357,3 +351,13 @@ def test_sample_values_are_valid(case):
     check = {"tckn": (s.tckn_is_valid, s.TCKN), "iban": (s.iban_is_valid, s.IBAN), "card": (s.luhn_is_valid, s.CARD)}
     is_valid, value = check[case]
     assert is_valid(value), f"the {case} sample has a wrong checksum"
+
+
+def test_observer_ignores_masked_url_password_but_catches_raw():
+    """The test's own url_password shape: a masked address is not a raw password, anything else after the colon is."""
+    raw_caught = "url_password" in s.raw_shapes_in(s.SECRET_SAMPLES["db_password"].text)
+    masked_ignored = "url_password" not in s.raw_shapes_in("postgres://app:[REDACTED]@db/x")
+    longer_caught = "url_password" in s.raw_shapes_in("postgres://app:[REDACTED]x@db/x")
+    assert raw_caught, "a raw URL password was not caught"
+    assert masked_ignored, "a masked URL password was counted as raw"
+    assert longer_caught, "a password that only starts with [REDACTED] was not caught"

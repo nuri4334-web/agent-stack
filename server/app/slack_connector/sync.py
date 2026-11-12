@@ -7,6 +7,8 @@ Run (inside server/): .venv/Scripts/python -m app.slack_connector.sync [--days 3
 - The same message (channel + ts) is not written twice; running the command again is safe.
 - If a channel fails, it is written to the audit log and the other channels continue.
 - The token is never written to any output, the audit log or an error message.
+- Secrets in a message are masked before it is written (sanitize, S3-05); if the filter fails, nothing of that channel
+  is written (CHANNEL_FILTER_FAILED).
 """
 import argparse
 import sqlite3
@@ -186,6 +188,16 @@ def _sync_channel(connection, client, row, bot_member, allowed, blocked, *, olde
         else:
             to_keep.append(m)
 
+    # Secrets are masked before the transaction: if the filter fails, nothing of this channel is written
+    # (never the raw text), and only the error type is shown.
+    try:
+        cleaned = []
+        for m in to_keep:
+            masked = sanitize.sanitize(m["text"])
+            cleaned.append((m, masked.text, sanitize.counts_json(masked)))
+    except Exception as e:
+        return error("CHANNEL_FILTER_FAILED", f"filter: {type(e).__name__}")
+
     updated_at = now().isoformat()
     member_set = set(members)
     new = 0
@@ -213,11 +225,11 @@ def _sync_channel(connection, client, row, bot_member, allowed, blocked, *, olde
                         "DELETE FROM channel_memberships WHERE channel_id = ? AND slack_user_id = ?",
                         (channel_id, old),
                     )
-            for m in to_keep:
+            for m, clean_text, secret_counts in cleaned:
                 cursor = connection.execute(
-                    "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) "
-                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT (channel_id, ts) DO NOTHING",
-                    (channel_id, m["ts"], m["user"], ts_to_iso(m["ts"]), sanitize.sanitize(m["text"])),
+                    "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text, secret_counts) "
+                    "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (channel_id, ts) DO NOTHING",
+                    (channel_id, m["ts"], m["user"], ts_to_iso(m["ts"]), clean_text, secret_counts),
                 )
                 new += cursor.rowcount
     except sqlite3.Error as e:

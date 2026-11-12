@@ -7,7 +7,8 @@ from app.slack_connector.seed import (
     SEED_PATH, SeedError, export_seed, write_seed_file, read_seed, load_seed, run_command,
 )
 from app.database.schema import connect
-from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, message, sample_slack
+from app.slack_connector import sanitize
+from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, sample_slack, ts
 
 SLACK_TABLES = ["channels", "slack_users", "channel_memberships", "messages"]
 D21_LIKE = (
@@ -31,6 +32,18 @@ def _filled(db, slack=None):
 
 def _load(db, data, allowed=ALLOWED_IDS, blocked=BLOCKED_IDS):
     return load_seed(db, data, allowed, lambda: NOW, blocked_channels=blocked)
+
+
+def _insert_raw_message(db, text, seq=900):
+    """A #dev message written straight into the table, as in a database from before the sync filter (S3-05).
+
+    So these tests check the seed file's own secret check, whatever the sync filter masks.
+    """
+    with db:
+        db.execute(
+            "INSERT INTO messages (channel_id, ts, author_id, sent_at, clean_text) VALUES ('C_DEV', ?, 'U_ALI', ?, ?)",
+            (ts(1, seq), "2026-10-23T11:00:00+00:00", text),
+        )
 
 
 def _empty_db():
@@ -91,9 +104,8 @@ def test_load_into_filled_db_is_rejected(db, tmp_path):
 
 
 def test_seed_with_token_pattern_is_not_written(db, tmp_path):
-    slack = sample_slack()
-    slack.messages["C_DEV"].append(message("U_ALI", "key: xoxb-1234-abcd-real", 1, 900))
-    _filled(db, slack)
+    _filled(db)
+    _insert_raw_message(db, "key: xoxb-1234-abcd-real")
     data = export_seed(db)
     path = tmp_path / "seed.json"
     with pytest.raises(SeedError) as error:
@@ -112,25 +124,25 @@ def test_seed_with_token_pattern_is_not_written(db, tmp_path):
 
 
 def test_fake_keys_with_example_stay_in_seed(db, tmp_path):
-    slack = sample_slack()
-    slack.messages["C_DEV"].append(message("U_ALI", D21_LIKE, 1, 900))
-    _filled(db, slack)
+    """A row with EXAMPLE fake keys passes the seed file's secret check (export and read) and is loaded through the
+    sync filter: the loaded text is exactly what sanitize makes of it (unchanged until the secret rules exist)."""
+    _filled(db)
+    _insert_raw_message(db, D21_LIKE)
     path = tmp_path / "seed.json"
     write_seed_file(export_seed(db), path)
     new = _empty_db()
     _load(new, read_seed(path))
     assert new.execute(
-        "SELECT clean_text FROM messages WHERE channel_id = 'C_DEV' AND clean_text LIKE 'SLACK_BOT%'"
-    ).fetchone() == (D21_LIKE,)
+        "SELECT clean_text FROM messages WHERE channel_id = 'C_DEV' AND ts = ?", (ts(1, 900),)
+    ).fetchone() == (sanitize.sanitize(D21_LIKE).text,)
     new.close()
 
 
 def test_rejected_if_used_token_appears_in_message(db, tmp_path):
     # It passes the pattern rule because it contains EXAMPLE; only the "used token" rule catches it.
     token = "xoxb-EXAMPLE-9999-USED"
-    slack = sample_slack()
-    slack.messages["C_DEV"].append(message("U_ALI", f"pasted by mistake {token}", 1, 900))
-    _filled(db, slack)
+    _filled(db)
+    _insert_raw_message(db, f"pasted by mistake {token}")
     path = tmp_path / "seed.json"
     with pytest.raises(SeedError) as error:
         write_seed_file(export_seed(db), path, token=token)
