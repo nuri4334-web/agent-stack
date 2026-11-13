@@ -3,6 +3,7 @@
 Messages have no raw text column; the audit log has no message text or free text.
 Passwords are kept only as a scrypt hash, session tokens only as a SHA-256 hash (S2-02).
 Each message keeps how many secrets of each kind were masked before it was written (secret_counts, S3-05); never a value.
+Each audit event keeps the kinds it masked (masked_kinds) and whether the question had a secret (alarm, S3-08); never a value.
 Details: docs/data-model.md
 """
 import sqlite3
@@ -11,7 +12,7 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Lowest SQLite version: STRICT tables (3.37) and the built-in JSON functions of the secret_counts check (3.38).
 MIN_SQLITE_VERSION = (3, 38, 0)
@@ -127,6 +128,12 @@ CREATE TABLE IF NOT EXISTS audit_events (
     blocked_count     INTEGER NOT NULL DEFAULT 0 CHECK (blocked_count >= 0),
     masked_count      INTEGER NOT NULL DEFAULT 0 CHECK (masked_count >= 0),
     suspicious_count  INTEGER NOT NULL DEFAULT 0 CHECK (suspicious_count >= 0),
+    masked_kinds      TEXT NOT NULL DEFAULT '{}' CHECK (
+                          json_valid(masked_kinds) AND json_type(masked_kinds) = 'object'
+                      ),
+    alarm             INTEGER NOT NULL DEFAULT 0 CHECK (
+                          alarm IN (0, 1) AND (alarm = 0 OR step = 'sanitization')
+                      ),
     duration_ms       REAL NOT NULL CHECK (duration_ms >= 0)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS audit_events_request ON audit_events (request_id);

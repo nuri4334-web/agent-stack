@@ -92,7 +92,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -105,13 +105,13 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 6")
+    connection.execute("PRAGMA user_version = 7")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()
 
 
-@pytest.mark.parametrize("old_version", [1, 2, 3, 4])
+@pytest.mark.parametrize("old_version", [1, 2, 3, 4, 5])
 def test_older_schema_version_is_rejected(old_version):
     connection = connect(":memory:")
     connection.execute(f"PRAGMA user_version = {old_version}")
@@ -143,8 +143,26 @@ def test_audit_events_have_no_text_column(db):
     assert _columns(db, "audit_events") == {
         "id", "created_at", "request_id", "person_id", "step", "decision", "reason_code", "channel_id",
         "message_count", "channel_count", "user_count", "membership_count",
-        "blocked_count", "masked_count", "suspicious_count", "duration_ms",
+        "blocked_count", "masked_count", "suspicious_count", "masked_kinds", "alarm", "duration_ms",
     }
+
+
+def test_event_masked_kinds_must_be_json_object(db):
+    _add_event(db)
+    _add_event(db, masked_kinds='{"slack_token":1}', masked_count=1)
+    for value in ["[]", "x", "1", '"text"']:
+        with pytest.raises(sqlite3.IntegrityError):
+            _add_event(db, masked_kinds=value)
+    assert db.execute("SELECT masked_kinds, alarm FROM audit_events ORDER BY id").fetchall() == [
+        ("{}", 0), ('{"slack_token":1}', 0),
+    ]
+
+
+def test_event_alarm_only_on_sanitization(db):
+    _add_event(db, step="sanitization", alarm=1)
+    for step, alarm in [("sanitization", 2), ("sanitization", -1), ("ask_ai", 1), ("login", 1)]:
+        with pytest.raises(sqlite3.IntegrityError):
+            _add_event(db, step=step, alarm=alarm)
 
 
 def test_event_reason_rejects_free_text(db):

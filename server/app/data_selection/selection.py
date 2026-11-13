@@ -1,10 +1,13 @@
 """Data selection query (S1-05): reads only messages of allowed channels from the S1-04 tables."""
+import json
 import logging
 import sqlite3
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 
 from .. import settings
+from ..audit.rules import kind_counts
+from ..filters.types import SECRET_KINDS
 from ..schemas import SourceMessage
 from ..database.rules import ALLOWED, channel_list_warnings, channel_status
 from .rules import (
@@ -21,6 +24,8 @@ _reported_warnings: set[str] = set()
 class Selection:
     result: TargetResult
     messages: list[SourceMessage] = field(default_factory=list)  # oldest to newest
+    # Secrets masked at sync, per message: source id -> kind -> count (only messages with a count). Never in a response.
+    secret_counts: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def reset_reported_warnings() -> None:
@@ -91,16 +96,42 @@ def select_messages(
     result, targets = find_target_channels(question, channels)
     # The current settings are applied to the target list too, even if the target decision is wrong.
     targets = [t for t in targets if t in readable_channel_ids and channel_status(t, allowed, blocked) == ALLOWED]
-    return Selection(result, _messages(connection, targets, channels, limit) if result == "ok" else [])
+    if result != "ok":
+        return Selection(result)
+    messages, secret_counts = _messages(connection, targets, channels, limit)
+    return Selection(result, messages, secret_counts)
 
 
-def _messages(connection, targets: list[str], channels, limit: int) -> list[SourceMessage]:
+def people_names(connection: sqlite3.Connection) -> tuple[str, ...]:
+    """The names of the Slack people for name masking: real_name and display_name of the non-bot users.
+
+    Spaces around a name are removed; empty names and repeats are left out; sorted.
+    """
+    names = set()
+    for real_name, display_name in connection.execute(
+        "SELECT real_name, display_name FROM slack_users WHERE is_bot = 0"
+    ):
+        for name in (real_name, display_name):
+            if name and name.strip():
+                names.add(name.strip())
+    return tuple(sorted(names))
+
+
+def _sync_counts(raw: str) -> dict[str, int]:
+    """The secret_counts of a message row. A wrong value is a ValueError: it must stop the question, never count as 0."""
+    return kind_counts(json.loads(raw), SECRET_KINDS)
+
+
+def _messages(
+    connection, targets: list[str], channels, limit: int,
+) -> tuple[list[SourceMessage], dict[str, dict[str, int]]]:
     if not targets:
-        return []
+        return [], {}
     placeholders = ", ".join("?" * len(targets))
     # The status condition is applied independently of the target list too: an excluded channel is never read.
     rows = connection.execute(
-        "SELECT m.channel_id, m.ts, m.sent_at, m.clean_text, c.name, u.slack_id, u.real_name, u.display_name "
+        "SELECT m.channel_id, m.ts, m.sent_at, m.clean_text, c.name, u.slack_id, u.real_name, u.display_name, "
+        "m.secret_counts "
         "FROM messages m "
         "JOIN channels c ON c.slack_id = m.channel_id "
         "JOIN slack_users u ON u.slack_id = m.author_id "
@@ -116,13 +147,20 @@ def _messages(connection, targets: list[str], channels, limit: int) -> list[Sour
         )
     }
     channel_names = {slack_id: name for slack_id, name, _ in channels}
-    return [
-        SourceMessage(
-            id=source_id(channel_id, ts),
+    messages: list[SourceMessage] = []
+    secret_counts: dict[str, dict[str, int]] = {}
+    for channel_id, ts, sent_at, clean_text, channel_name, author_id, real_name, display_name, raw_counts in reversed(
+        rows
+    ):
+        message_id = source_id(channel_id, ts)
+        messages.append(SourceMessage(
+            id=message_id,
             channel=channel_name,
             author=author_name(real_name, display_name, author_id),
             time=sent_at,
             text=resolve_slack_mentions(clean_text, user_names, channel_names),
-        )
-        for channel_id, ts, sent_at, clean_text, channel_name, author_id, real_name, display_name in reversed(rows)
-    ]
+        ))
+        counts = _sync_counts(raw_counts)
+        if counts:
+            secret_counts[message_id] = counts
+    return messages, secret_counts

@@ -1,5 +1,12 @@
 """Audit rules (S2-04): pure functions; use no database, network or clock."""
 import re
+from collections import Counter
+from collections.abc import Collection, Mapping
+
+from ..filters.types import PERSONAL_KINDS, SECRET_KINDS
+
+# The kinds counted on the screen (security.masked): secrets and personal data, never names (decision N3).
+SCREEN_KINDS = frozenset(SECRET_KINDS + PERSONAL_KINDS)
 
 # Reason codes of the gateway steps (API contract 11); the login codes are written by app/accounts/login.py.
 GATEWAY_REASON_CODES = frozenset({
@@ -50,6 +57,35 @@ def gateway_event(
         "person_id": person_id,
         "message_count": message_count if step in MESSAGE_COUNT_STEPS else 0,
     }
+
+
+def kind_counts(counts: Mapping[str, object], allowed: Collection[str]) -> dict[str, int]:
+    """Checks per-kind counts (kind -> count) and returns them sorted by kind.
+
+    Only kinds in `allowed` and whole counts of at least 1 (not bool) are accepted; anything else is a ValueError.
+    The error never names a kind or a count, so it can be logged.
+    """
+    if not isinstance(counts, Mapping):
+        raise ValueError("Counts must be an object of kinds.")
+    for kind, count in counts.items():
+        if kind not in allowed:
+            raise ValueError("Unknown kind in counts.")
+        if type(count) is not int or count < 1:
+            raise ValueError("Counts must be whole numbers of at least 1.")
+    return dict(sorted(counts.items()))
+
+
+def add_counts(*counts: Mapping[str, int]) -> dict[str, int]:
+    """The per-kind sum of several count mappings, sorted by kind, without kinds of count 0."""
+    total: Counter[str] = Counter()
+    for item in counts:
+        total.update(item)
+    return {kind: total[kind] for kind in sorted(total) if total[kind] > 0}
+
+
+def screen_masked(kinds: Mapping[str, int]) -> int:
+    """security.masked: the secrets and personal data of a per-kind count; names (person) never count (N3)."""
+    return sum(count for kind, count in kinds.items() if kind in SCREEN_KINDS)
 
 
 def parse_event_limit(values: list[str]) -> int:

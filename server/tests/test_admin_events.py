@@ -16,7 +16,7 @@ LOGOUT = "/api/auth/logout"
 TIME = "2026-11-04T09:00:00+00:00"
 FIELDS = {
     "created_at", "request_id", "person", "channel", "step", "decision", "reason_code",
-    "message_count", "blocked_count", "masked_count", "suspicious_count", "duration_ms",
+    "message_count", "blocked_count", "masked_count", "suspicious_count", "masked_kinds", "alarm", "duration_ms",
 }
 UNAUTHENTICATED = {"error": {"code": "UNAUTHENTICATED", "message": "Please sign in."}}
 FORBIDDEN = {"error": {"code": "FORBIDDEN", "message": "You don't have permission for this page."}}
@@ -158,7 +158,7 @@ def test_newest_first_also_with_the_same_time(client_as):
 # --- Fields
 
 
-def test_exactly_the_twelve_contract_fields(client_as):
+def test_exactly_the_contract_fields(client_as):
     c = client_as("admin")
     _add_events(1)
     events = c.get(EVENTS).json()["events"]
@@ -172,11 +172,12 @@ def test_all_fields_of_a_stopped_event(client_as):
     _add_events(
         1, step="data_selection", decision="stopped", reason_code="CHANNEL_NOT_ALLOWED", channel_id="C0C83M051QD",
         person_id=_person_id("ali"), message_count=4, blocked_count=1, masked_count=2, suspicious_count=3,
+        masked_kinds={"aws_key": 2},
     )
     assert c.get(f"{EVENTS}?limit=1").json()["events"] == [{
         "created_at": TIME, "request_id": "1", "person": "ali", "channel": "dev", "step": "data_selection",
         "decision": "stopped", "reason_code": "CHANNEL_NOT_ALLOWED", "message_count": 4, "blocked_count": 1,
-        "masked_count": 2, "suspicious_count": 3, "duration_ms": 1.5,
+        "masked_count": 2, "suspicious_count": 3, "masked_kinds": {"aws_key": 2}, "alarm": False, "duration_ms": 1.5,
     }]
 
 
@@ -232,3 +233,44 @@ def test_endpoint_writes_no_event_and_never_calls_ai(client_as, sent_to_ai):
 def test_openapi_lists_the_answers():
     operation = app.openapi()["paths"][EVENTS]["get"]
     assert {"200", "401", "403", "422", "500"} <= set(operation["responses"])
+
+
+# --- S3-08: masked_kinds and alarm
+
+
+@pytest.mark.parametrize("fields", [
+    {"masked_kinds": {"unknown": 1}, "masked_count": 1},
+    {"masked_kinds": {"slack_token": 0}},
+    {"masked_kinds": {"slack_token": 2}, "masked_count": 1},
+    {"masked_kinds": {}, "masked_count": 1},
+    {"step": "ask_ai", "alarm": True},
+    {"step": "sanitization", "alarm": 1},
+], ids=["unknown_kind", "zero_count", "sum_too_big", "sum_too_small", "alarm_other_step", "alarm_not_bool"])
+def test_write_event_rejects_bad_kinds_or_alarm(fields):
+    def event_count():
+        connection = connect(settings.DATABASE_PATH)
+        try:
+            return connection.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+        finally:
+            connection.close()
+
+    before = event_count()
+    with pytest.raises(ValueError):
+        _add_events(1, **fields)
+    assert event_count() == before
+
+
+def test_masked_kinds_and_alarm_in_the_list(client_as):
+    c = client_as("admin")
+    _add_events(1, step="sanitization", masked_count=3, masked_kinds={"slack_token": 1, "person": 2}, alarm=True)
+    event = c.get(f"{EVENTS}?limit=1").json()["events"][0]
+    assert (event["masked_kinds"], event["alarm"], event["masked_count"]) == ({"person": 2, "slack_token": 1}, True, 3)
+
+
+def test_rows_without_kinds_have_empty_kinds_and_no_alarm(client_as):
+    c = client_as("admin")  # the login row of admin
+    _add_events(1)
+    events = c.get(EVENTS).json()["events"]
+    assert len(events) == 2
+    for event in events:
+        assert (event["masked_kinds"], event["alarm"]) == ({}, False)

@@ -167,7 +167,7 @@ def test_gateway_response_check_secret_in_answer_updates_event_only(client_as, m
 
     assert "SECRET_IN_ANSWER" not in body["answer"]
     assert "[REDACTED]" in body["answer"]
-    assert body["security"]["masked"] == 0
+    assert body["security"]["masked"] == 7  # S3-08: the #dev secrets masked at sync; the answer's scan never counts
 
     admin_client = client_as("admin")
     events_resp = admin_client.get("/api/admin/events")

@@ -24,13 +24,6 @@ from app.slack_connector.sync import sync_slack
 from tests import attack_samples as s
 from tests.fake_slack import ALLOWED_IDS, BLOCKED_IDS, NOW, message, sample_slack, ts
 
-PENDING_S3_08 = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="S3-08 sanitization step + S3-09 secret rules",
-)
-PENDING_S3_03 = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="S3-03 answer check (PR #25) + S3-09 secret rules (PR #24)",
-)
-
 SECRET_KINDS = list(s.SECRET_SAMPLES)
 
 
@@ -197,7 +190,6 @@ def test_seed_load_masks_secrets(memory_db):
 KEY_QUESTION = f"#dev'i özetle, bu anahtar çalışmıyor: {s.SLACK_TOKEN}"
 
 
-@PENDING_S3_08
 def test_key_pasted_in_question_is_not_sent(client_as, sent_to_ai):
     """Ali pastes a Slack token into his question: not stopped (B2), the AI gets [REDACTED], alarm is true."""
     r = s.ask(client_as("ali"), KEY_QUESTION)
@@ -231,7 +223,6 @@ def _insert_raw_dev_message(path) -> None:
         connection.close()
 
 
-@PENDING_S3_08
 def test_raw_secret_in_stored_message_is_not_sent(client_as, sent_to_ai, _temporary_database):
     """A raw secret already in the database is masked again at question time (interface table, place B)."""
     _insert_raw_dev_message(_temporary_database)
@@ -246,7 +237,6 @@ def test_raw_secret_in_stored_message_is_not_sent(client_as, sent_to_ai, _tempor
     assert body["security"].get("alarm", False) is False, "alarm must be false when the question has no secret"
 
 
-@PENDING_S3_08
 def test_sanitization_event_counts_kind_without_value(client_as, sent_to_ai):
     """The sanitization event of a question with a token: alarm, the kind and its count, never the value."""
     r = s.ask(client_as("ali"), KEY_QUESTION)
@@ -299,7 +289,6 @@ def test_no_messages_answer_never_alarms(client_as, sent_to_ai, _temporary_datab
 
 # === Group 5: second scan of the answer (S3-03 + S3-09) =============================================================
 
-@PENDING_S3_03
 def test_secret_in_answer_is_masked_not_counted_on_screen(client_as, sent_to_ai, monkeypatch):
     """The AI answers with a token: the user gets [REDACTED]; security.masked does not change (N2); the
     response_check event counts it."""

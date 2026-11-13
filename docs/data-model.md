@@ -4,7 +4,7 @@ The server's SQLite tables. Sprint 1 · S1-03; accounts and sessions: Sprint 2 �
 
 - The database is opened with Python's own `sqlite3` module; there is no extra package, ORM or migration tool.
 - The file location is the `DATABASE_PATH` setting in `.env` (a relative path is resolved from the repo root). Tests use an in-memory (`:memory:`) database or a seeded database in a temporary folder; they never touch the real file.
-- The schema version is kept in `PRAGMA user_version`; the current version is **5** (S3-05: `messages.secret_counts`; version 4, S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
+- The schema version is kept in `PRAGMA user_version`; the current version is **6** (S3-08: `audit_events.masked_kinds` and `audit_events.alarm`; version 5, S3-05: `messages.secret_counts`; version 4, S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
 - All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.38.0 is needed: 3.37 for `STRICT`, 3.38 for the built-in JSON functions of the `secret_counts` check).
 - Time fields are ISO 8601 text (e.g. `2026-10-22T14:05:00+03:00`). The database does not fill in the time itself; the writing code always gives the time.
 - There is no cascading delete (`ON DELETE CASCADE`).
@@ -128,6 +128,8 @@ Decisions of the gateway steps and of Slack sync runs. There is no message text,
 | `blocked_count` | Number of things blocked in this step. |
 | `masked_count` | Number of things masked in this step. |
 | `suspicious_count` | Number of things found suspicious in this step. |
+| `masked_kinds` | What `masked_count` counted, by kind (S3-08): a JSON object, kind → count, e.g. `{"person":3,"slack_token":2}`; `{}` if nothing (also the default). Only the 16 filter kinds and counts of at least 1; the sum of the values equals `masked_count` (checked when the row is written). Never a value. |
+| `alarm` | 1 only on a `sanitization` row whose question itself had a certain secret (S3-08); 0 on every other row (a check rejects 1 on any other step). |
 | `duration_ms` | Duration of the step, milliseconds. |
 
 All counts are at least 0 and are 0 if not given.
@@ -171,7 +173,11 @@ Slack's own error code (e.g. `not_in_channel`) is not written to the audit log; 
 | `PROVIDER_ERROR`, `TIMEOUT` | `ask_ai` | The AI call failed; `TIMEOUT` → `TIMEOUT`, every other AI error code (e.g. `QUOTA_EXCEEDED`) → `PROVIDER_ERROR`. |
 
 - An unexpected error inside a step: the step is `stopped` with an empty `reason_code`, then the answer is 500.
-- `message_count`: messages selected (`data_selection`) or sent to the AI (`ask_ai`); 0 in the other steps. The other counts are 0 until the filters of Stage 3-4.
+- `message_count`: messages selected (`data_selection`) or sent to the AI (`ask_ai`); 0 in the other steps.
+- `sanitization` (S3-08): `masked_count` / `masked_kinds` count what was masked in the question and in the messages sent to the AI, names (`person`) included, plus the secrets masked at sync (`messages.secret_counts`) of those messages; a value already `[REDACTED]` is not counted again. `alarm` as above; `suspicious_count` is the number of messages removed as suspicious (0 until Stage 4).
+- `response_check` (S3-03, S3-08): `blocked_count` = removed links and images; `masked_count` / `masked_kinds` = the secrets of the answer's second scan.
+- Every other count is 0, and `masked_kinds` is `{}` on every other row (also `login`, `logout`, `slack_sync`).
+- A wrong `messages.secret_counts` value (not a secret kind, or not a whole count of at least 1) stops the question in `data_selection` (500, no reason code); it is never counted as 0.
 - `channel_id`: from `authorization` on, the channel if the question names exactly one channel and that name is exactly one row of `channels`, whatever its status; otherwise empty (no name, more than one name, a name that is not in the table). So `#ik` is empty in a database loaded from the seed (the seed has no `ik` row) and filled after a real sync.
 - `/api/ask` without a session: no step runs; one row is written (`identity`, `stopped`, `UNAUTHENTICATED`, `person_id` empty), at most 30 rows per IP address in 15 minutes (in memory). Over the limit only a count goes to the server log. `/api/auth/me` and the admin endpoint write no row.
 - **If a row cannot be written, the request stops:** the answer is 500 `SERVER_ERROR`, no later step runs and the AI is not called if it has not been called yet; the server log gets only the step, the request id and the error type. Without a session the answer stays 401 and the error is only logged. This is stricter than the login and logout events and `ai_calls`, where the login or the answer still works and the error is logged.

@@ -1,8 +1,8 @@
 """Data selection rules (S1-05): pure functions; use no database, network or clock."""
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
 from ..database.rules import ALLOWED, normalize_channel_name
 
@@ -15,6 +15,8 @@ _USER_MENTION = re.compile(r"<@([UW][A-Z0-9]+)(?:\|[^>]*)?>")
 _CHANNEL_MENTION = re.compile(r"<#(C[A-Z0-9]+)(?:\|[^>]*)?>")
 
 TargetResult = Literal["ok", "no_slack_data", "channel_not_allowed"]
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -151,3 +153,16 @@ def resolve_slack_mentions(
         return f"#{name}" if name else m.group(0)
 
     return _CHANNEL_MENTION.sub(channel, _USER_MENTION.sub(user, text))
+
+
+def split_suspicious(
+    items: Sequence[T], text_of: Callable[[T], str], is_suspicious: Callable[[str], bool] | None,
+) -> tuple[list[T], int]:
+    """The items that are not suspicious (order kept) and how many were removed.
+
+    is_suspicious None: no check is connected yet (Stage 4 connects the detector), so every item is kept and 0 removed.
+    """
+    if is_suspicious is None:
+        return list(items), 0
+    kept = [item for item in items if not is_suspicious(text_of(item))]
+    return kept, len(items) - len(kept)
