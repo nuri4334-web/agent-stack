@@ -21,7 +21,7 @@ def test_ask_returns_contract_compliant_answer(client_as):
     assert body["status"] == "ok"
     assert len(body["sources"]) == 27
     assert set(body["sources"][0]) == {"id", "channel", "author", "time", "text"}
-    assert body["security"] == {"blocked": 0, "masked": 0, "suspicious": 0}
+    assert body["security"] == {"blocked": 0, "masked": 7, "suspicious": 0, "alarm": False}
 
 
 def test_invalid_request_returns_clear_error(client_as):

@@ -7,7 +7,10 @@ import pytest
 from app import settings
 from app.audit import event_limit
 from app.audit.event_limit import IP_LIMIT, UnauthenticatedEventLimiter
-from app.audit.rules import GATEWAY_REASON_CODES, gateway_event, parse_event_limit
+from app.audit.rules import (
+    GATEWAY_REASON_CODES, add_counts, gateway_event, kind_counts, parse_event_limit, screen_masked,
+)
+from app.filters.types import KINDS, SECRET_KINDS
 from app.data_selection.rules import find_target_channels, named_channel_id
 
 NOW = datetime(2026, 11, 4, 9, 0, tzinfo=timezone.utc)
@@ -183,3 +186,45 @@ def test_named_channel_id_same_as_the_only_target_of_an_allowed_channel(question
     result, targets = find_target_channels(question, CHANNELS)
     assert result == "ok"
     assert [named_channel_id(question, CHANNELS)] == targets
+
+
+# --- S3-08: per-kind counts
+
+
+def test_kind_counts_sorts_and_accepts_known_kinds():
+    assert kind_counts({"slack_token": 2, "aws_key": 1}, SECRET_KINDS) == {"aws_key": 1, "slack_token": 2}
+    assert kind_counts({}, SECRET_KINDS) == {}
+    assert kind_counts({"person": 3, "email": 1}, KINDS) == {"email": 1, "person": 3}
+
+
+@pytest.mark.parametrize("counts", [
+    {"email": 1}, {"person": 1}, {"unknown": 1},
+], ids=["personal_not_allowed", "name_not_allowed", "unknown"])
+def test_kind_counts_rejects_kinds_not_allowed(counts):
+    with pytest.raises(ValueError, match="^Unknown kind in counts.$"):
+        kind_counts(counts, SECRET_KINDS)
+
+
+@pytest.mark.parametrize("count", [0, -1, 1.5, 1.0, "1", True, None], ids=str)
+def test_kind_counts_rejects_bad_counts(count):
+    with pytest.raises(ValueError, match="^Counts must be whole numbers of at least 1.$"):
+        kind_counts({"slack_token": count}, SECRET_KINDS)
+
+
+@pytest.mark.parametrize("counts", [[], "x", 1, None], ids=["list", "text", "number", "none"])
+def test_kind_counts_rejects_non_objects(counts):
+    with pytest.raises(ValueError):
+        kind_counts(counts, SECRET_KINDS)
+
+
+def test_add_counts_sums_sorts_and_drops_zero():
+    assert add_counts({"slack_token": 1}, {}, {"aws_key": 2, "slack_token": 1}, {"email": 0}) == {
+        "aws_key": 2, "slack_token": 2,
+    }
+    assert add_counts() == {}
+
+
+def test_screen_masked_counts_secrets_and_personal_data_never_names():
+    assert screen_masked({"slack_token": 2, "email": 1, "person": 5}) == 3
+    assert screen_masked({"person": 4}) == 0
+    assert screen_masked({}) == 0

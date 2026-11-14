@@ -51,6 +51,7 @@ class SecuritySummary(BaseModel):
     blocked: int = 0
     masked: int = 0
     suspicious: int = 0
+    alarm: bool = False  # True only if the question itself had a certain secret and the sanitization step ran (S3-08)
 
 
 class AskResponse(BaseModel):
@@ -73,6 +74,8 @@ class AuditEventItem(BaseModel):
     blocked_count: int
     masked_count: int
     suspicious_count: int
+    masked_kinds: dict[str, int]  # kind -> count, never a value
+    alarm: bool
     duration_ms: float
 
 

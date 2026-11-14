@@ -15,14 +15,19 @@ from . import ai, settings
 from .accounts.rules import SignedInPerson
 from .audit.event_limit import UnauthenticatedEventLimiter, unauthenticated_event_limiter
 from .audit.log import AuditWriteError, write_ai_call, write_event
-from .audit.rules import gateway_event
-from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id
-from .data_selection.selection import member_channel_ids, question_time_channels, select_messages
+from .audit.rules import add_counts, gateway_event, screen_masked
+from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id, split_suspicious
+from .data_selection.selection import member_channel_ids, people_names, question_time_channels, select_messages
 from .database.schema import connect, create_tables
+from .filters.api import Vault, mask_secrets
 from .filters.output import clean_answer
 from .schemas import AskResponse, SecuritySummary, SourceMessage
 
 log = logging.getLogger("agentstack")
+
+# The hidden instruction check of the sanitization step: None until Stage 4 connects the detector
+# (Stage 4: lambda text: injection.detect(text).suspicious). With None no message is removed.
+SUSPICIOUS_CHECK: Callable[[str], bool] | None = None
 
 NO_ACCESS_ANSWER = "You don't have access to this information."
 NO_MESSAGES_ANSWER = "No messages were found for this question."
@@ -48,19 +53,25 @@ def _new_request_id() -> str:
 class RequestContext:
     """The information carried along a question's journey through the gateway."""
 
-    question: str
+    question: str = field(repr=False)  # as the user wrote it; used for authorization, never sent to the AI
     person: SignedInPerson | None  # only from the server session
     request_id: str = field(default_factory=_new_request_id)
     status: str = "ok"
     readable_channel_ids: tuple[str, ...] | None = None  # None: no authorization decision, so nothing is read
-    selected_messages: list[SourceMessage] = field(default_factory=list)
+    selected_messages: list[SourceMessage] = field(default_factory=list)  # masked by the sanitization step
     sources: list[SourceMessage] = field(default_factory=list)  # the messages really sent to the AI
+    # The masked question; None until the sanitization step ran, and ask_ai refuses to run without it.
+    question_for_ai: str | None = field(default=None, repr=False)
+    # One per request, in memory only, never logged or written. The lambda reads the module name at call time.
+    vault: Vault = field(default_factory=lambda: Vault(), repr=False)
+    sync_secret_counts: dict[str, dict[str, int]] = field(default_factory=dict, repr=False)  # source id -> kind -> count
+    masked_kinds: dict[str, int] = field(default_factory=dict)  # sanitization: question + messages sent, names included
     model_answer: str = ""
     model_used: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     security: SecuritySummary = field(default_factory=SecuritySummary)
-    answer_masked: int = 0  # secrets masked in the answer's second scan (logged on response_check only)
+    answer_masked_kinds: dict[str, int] = field(default_factory=dict)  # answer's second scan (response_check row only)
     step_durations_ms: dict[str, float] = field(default_factory=dict)
     stopped: bool = False  # if True, later steps (including the AI) do not run
     reason_code: str | None = None  # why the step stopped (API contract 11); handle_question writes it to the event
@@ -123,21 +134,50 @@ def data_selection(c: RequestContext) -> None:
         c.stopped = True
     else:
         c.selected_messages = selection.messages
+        c.sync_secret_counts = selection.secret_counts
 
 
-# --- 4. Sanitization (Stage 3-4): name masking, removing suspicious messages.
+# --- 4. Sanitization (S3-08): the question and the selected messages are masked before the AI.
+# Secrets -> [REDACTED] (mask_secrets); personal data and names -> placeholders (Vault, body in S3-12).
+# Runs only after authorization and data selection passed, so an unauthorized request masks nothing.
+# Everything is computed first and written to the context at the end: an error leaves no half result.
 def sanitization(c: RequestContext) -> None:
-    pass
+    people = people_names(c.connection)
+    question_secrets = mask_secrets(c.question)
+    question_vault = c.vault.mask(question_secrets.text, people)
+
+    masked: list[tuple[SourceMessage, dict[str, int]]] = []
+    for message in c.selected_messages:
+        text_secrets = mask_secrets(message.text)
+        text_vault = c.vault.mask(text_secrets.text, people)
+        author_vault = c.vault.mask(message.author, people)
+        counts = add_counts(
+            c.sync_secret_counts.get(message.id, {}), text_secrets.counts, text_vault.counts, author_vault.counts,
+        )
+        masked.append((message.model_copy(update={"text": text_vault.text, "author": author_vault.text}), counts))
+
+    kept, removed = split_suspicious(masked, lambda item: item[0].text, SUSPICIOUS_CHECK)
+    masked_kinds = add_counts(question_secrets.counts, question_vault.counts, *(counts for _, counts in kept))
+
+    c.question_for_ai = question_vault.text
+    c.selected_messages = [message for message, _ in kept]
+    c.masked_kinds = masked_kinds
+    c.security.masked = screen_masked(masked_kinds)
+    c.security.alarm = question_secrets.alarm  # only a secret in the question itself gives an alarm
+    c.security.suspicious = removed
 
 
 # --- 5. Ask the AI (S1-08, Boran): instruction and data go in separate fields.
 def ask_ai(c: RequestContext) -> None:
+    if c.question_for_ai is None:
+        # Defense in depth: never fall back to the unmasked question.
+        raise RuntimeError("Sanitization did not run.")
     message_lines = [
         f"[#{m.channel} | {m.author} | {m.time}]: {m.text}"
         for m in c.selected_messages
     ]
     data_block = "\n".join(message_lines) if message_lines else "(No messages)"
-    data_text = f"User question: {c.question}\n\nRelevant messages:\n{data_block}"
+    data_text = f"User question: {c.question_for_ai}\n\nRelevant messages:\n{data_block}"
 
     start = time.perf_counter()
     try:
@@ -209,7 +249,7 @@ def response_check(c: RequestContext) -> None:
     cleaned = clean_answer(c.model_answer)
     c.model_answer = cleaned.text
     c.security.blocked += cleaned.links_removed + cleaned.images_removed
-    c.answer_masked = sum(cleaned.secrets.values())
+    c.answer_masked_kinds = dict(cleaned.secrets)
 
 
 # --- 7. Presentation (Stage 3): name masks are opened, [REDACTED] stays.
@@ -234,10 +274,16 @@ def _write_step_event(c: RequestContext, step: str, duration_ms: float) -> None:
     If it cannot be written the request stops (the safe side): no later step runs, the answer is 500.
     The log gets only the step, the request id and the error type.
     """
-    extra_counts: dict[str, int] = {}
-    if step == "response_check":
-        extra_counts["blocked_count"] = c.security.blocked
-        extra_counts["masked_count"] = c.answer_masked
+    extra: dict[str, object] = {}
+    if step == "sanitization":
+        extra["masked_count"] = sum(c.masked_kinds.values())
+        extra["masked_kinds"] = c.masked_kinds
+        extra["alarm"] = c.security.alarm
+        extra["suspicious_count"] = c.security.suspicious
+    elif step == "response_check":
+        extra["blocked_count"] = c.security.blocked
+        extra["masked_count"] = sum(c.answer_masked_kinds.values())
+        extra["masked_kinds"] = c.answer_masked_kinds
     try:
         with c.connection:
             write_event(
@@ -253,7 +299,7 @@ def _write_step_event(c: RequestContext, step: str, duration_ms: float) -> None:
                     created_at=c.now().isoformat(),
                     duration_ms=duration_ms,
                 ),
-                **extra_counts,
+                **extra,
             )
     except Exception as error:
         log.error("Failed to write audit event (step %s, request %s): %s", step, c.request_id, type(error).__name__)
