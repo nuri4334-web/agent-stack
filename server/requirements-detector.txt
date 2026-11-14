@@ -1,0 +1,10 @@
+# Optional: the local hidden instruction (prompt injection) detector, app/filters/injection.py.
+# Not needed to run the tests: without these libraries detect() fails closed (every text is suspicious).
+# Setup only (network): see server/README.md, "Injection detector (optional)".
+# CPU-only torch is enough and much smaller:
+#   pip install -r requirements-detector.txt --extra-index-url https://download.pytorch.org/whl/cpu
+# Tested with torch 2.15.0+cpu, transformers 5.22.2, huggingface_hub 2.4.0, tokenizers 0.23.3 (Python 3.12, Windows).
+# The lower bounds below are not tested.
+torch>=2.4
+transformers>=4.48  # ModernBERT (the model's architecture) needs 4.48 or newer
+huggingface_hub>=0.24
