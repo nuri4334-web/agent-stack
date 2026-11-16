@@ -14,6 +14,7 @@ from app.accounts.rules import SignedInPerson
 from app.data_selection import selection as selection_module
 from app.data_selection.selection import select_messages
 from app.database.schema import connect
+from app.filters.api import Vault
 from tests.auth_clients import FIXTURE_ACCOUNTS, channels_sent_to_ai
 
 ASK = "/api/ask"
@@ -231,9 +232,19 @@ def _line(source):
     return f"[#{source.channel} | {source.author} | {source.time}]: {source.text}"
 
 
-def test_sources_are_the_messages_sent_to_the_ai_in_the_same_order(fixture_accounts, sent_to_ai):
+def test_sources_are_the_messages_sent_to_the_ai_in_the_same_order(fixture_accounts, sent_to_ai, monkeypatch):
+    # S3-12: the AI saw placeholders and the sources are restored, so the request's own Vault opens the data first.
+    vaults = []
+
+    class SpyVault(Vault):
+        def __init__(self):
+            super().__init__()
+            vaults.append(self)
+
+    monkeypatch.setattr(gateway, "Vault", SpyVault)
     answer = _ask("ali", QUESTION_NO_CHANNEL)
-    data = sent_to_ai[0]
+    assert len(vaults) == 1
+    data = vaults[0].restore(sent_to_ai[0])
     assert data.endswith("\n".join(_line(s) for s in answer.sources))
     assert _query("SELECT messages_sent FROM ai_calls") == [(len(answer.sources),)]
 

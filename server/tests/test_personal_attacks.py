@@ -14,11 +14,6 @@ from app import ai
 from app.database.schema import connect
 from tests import attack_samples as s
 
-PENDING_S3_12 = pytest.mark.xfail(
-    strict=True, raises=AssertionError,
-    reason="S3-12 Vault + S3-07 personal/name rules + S3-08 sanitization step",
-)
-
 PERSONAL_CASES = list(s.PERSONAL_SAMPLES)
 NAME_FIELDS = ["real_name", "display_name"]
 NO_PLACEHOLDER_ANSWER = "The fake provider saw no placeholder."
@@ -76,7 +71,6 @@ def _name_question(name: str) -> str:
 
 # === Group 4: personal data and names (S3-07 + S3-08 + S3-12) =======================================================
 
-@PENDING_S3_12
 @pytest.mark.parametrize("case", PERSONAL_CASES)
 def test_personal_data_in_question_is_placeholder(client_as, sent_to_ai, case):
     """Personal data in Ali's question: the AI never sees the value, it sees the placeholder."""
@@ -90,7 +84,6 @@ def test_personal_data_in_question_is_placeholder(client_as, sent_to_ai, case):
     assert has_placeholder, f"no {prefix}_n placeholder for {case}"
 
 
-@PENDING_S3_12
 @pytest.mark.parametrize("field", NAME_FIELDS)
 def test_person_name_in_question_is_placeholder(client_as, sent_to_ai, _temporary_database, field):
     """A Slack person's name in the question: the question part sent to the AI has PERSON_n, not the name."""
@@ -105,7 +98,6 @@ def test_person_name_in_question_is_placeholder(client_as, sent_to_ai, _temporar
     assert has_placeholder, f"no PERSON_n placeholder for the {field}"
 
 
-@PENDING_S3_12
 def test_message_authors_are_placeholders(client_as, sent_to_ai, _temporary_database):
     """Decision B1 covers every Slack person name, the author in the message header too: "#dev'i özetle" sends no
     real_name of any #dev author to the AI, anywhere in the data."""
@@ -128,7 +120,6 @@ def test_message_authors_are_placeholders(client_as, sent_to_ai, _temporary_data
     assert has_placeholder, "no PERSON_n placeholder in the data"
 
 
-@PENDING_S3_12
 @pytest.mark.parametrize("case", PERSONAL_CASES)
 def test_personal_data_is_restored_for_the_asker(client_as, echo_placeholders, case):
     """The AI answers with the placeholder: Ali gets the real value back (B1)."""
@@ -139,7 +130,6 @@ def test_personal_data_is_restored_for_the_asker(client_as, echo_placeholders, c
     assert restored, f"{case} was not restored"
 
 
-@PENDING_S3_12
 @pytest.mark.parametrize("field", NAME_FIELDS)
 def test_person_name_is_restored_for_the_asker(client_as, echo_placeholders, _temporary_database, field):
     """The AI answers with PERSON_n: Ali gets the real name back (B1)."""
@@ -150,7 +140,6 @@ def test_person_name_is_restored_for_the_asker(client_as, echo_placeholders, _te
     assert restored, f"person ({field}) was not restored"
 
 
-@PENDING_S3_12
 def test_personal_data_counts_in_masked(client_as, sent_to_ai):
     """One e-mail in the question adds exactly 1 to security.masked (API contract 8, from S3-12)."""
     ali = client_as("ali")
@@ -161,7 +150,6 @@ def test_personal_data_counts_in_masked(client_as, sent_to_ai):
     assert diff == 1, "an e-mail in the question must add 1 to security.masked"
 
 
-@PENDING_S3_12
 def test_names_not_counted_in_masked_but_in_event(client_as, sent_to_ai, _temporary_database):
     """Decision N3: a name in the question does not change security.masked, but the sanitization event counts it
     under person."""

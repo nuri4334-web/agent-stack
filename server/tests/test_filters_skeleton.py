@@ -58,9 +58,12 @@ def test_mask_secrets_skeleton_returns_the_text_unchanged():
     assert api.mask_secrets(TEXT) == FilterResult(TEXT, {}, False)
 
 
-def test_vault_skeleton_masks_and_restores_nothing():
+def test_vault_masks_and_restores_the_sample_text():
+    # S3-12 filled the Vault body; its own tests are test_vault.py.
     vault = api.Vault()
-    assert vault.mask(TEXT, ["Deniz Aydın"]) == FilterResult(TEXT, {}, False)
+    masked = vault.mask(TEXT, ["Deniz Aydın"])
+    assert masked == FilterResult("PERSON_1: deploy failed, EMAIL_1", {"email": 1, "person": 1}, False)
+    assert vault.restore(masked.text) == TEXT
     assert vault.restore(TEXT) == TEXT
 
 

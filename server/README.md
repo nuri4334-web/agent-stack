@@ -61,7 +61,9 @@ Inside `server/`, with the venv:
 The schema version is 6 (S3-08: `masked_kinds` and `alarm` in `audit_events`). If you have an older local database, the
 server does not start: delete `server/agentstack.db`, run `seed load` again and create the demo accounts again (see "Accounts").
 Sync and `seed load` mask secrets before writing (`[REDACTED]`). At question time the gateway masks the question and the
-selected messages again before the AI (sanitization step, S3-08). To prove that the database keeps no raw secret
+selected messages again before the AI (sanitization step, S3-08). Personal data and people names go to the AI as
+placeholders (`EMAIL_1`, `PERSON_1`) and are restored in the answer and the sources for the asking person (S3-12);
+`[REDACTED]` is never restored. To prove that the database keeps no raw secret
 (read only; exit 0 clean, 1 found, 2 could not check; it prints only message ids and kinds, never a value):
 
 ```

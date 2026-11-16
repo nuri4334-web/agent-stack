@@ -24,6 +24,8 @@ SERVER_ERROR = {"error": {"code": "SERVER_ERROR", "message": "An unexpected serv
 DEV_KINDS = {"aws_key": 2, "db_password": 1, "env_secret": 1, "github_token": 1, "google_key": 1, "slack_token": 1}
 DEV_MASKED = sum(DEV_KINDS.values())
 DEV_MESSAGES = 27
+# S3-12: people names in #dev (27 message authors + 12 in the texts); counted in the event, never on the screen.
+DEV_PERSONS = 39
 KEY_QUESTION_START = "#dev'i özetle, bu anahtar çalışmıyor: "
 KEY_QUESTION = KEY_QUESTION_START + s.SLACK_TOKEN
 
@@ -113,8 +115,8 @@ def test_question_key_is_masked_sent_redacted_and_alarms(client_as, sent_to_ai):
     assert body["security"]["alarm"] is True
     assert body["security"]["masked"] == DEV_MASKED + 1
     row = _row(body["request_id"], "sanitization")
-    assert row["masked_kinds"] == DEV_KINDS | {"slack_token": 2}
-    assert (row["masked_count"], row["alarm"]) == (DEV_MASKED + 1, True)
+    assert row["masked_kinds"] == DEV_KINDS | {"slack_token": 2, "person": DEV_PERSONS}
+    assert (row["masked_count"], row["alarm"]) == (DEV_MASKED + 1 + DEV_PERSONS, True)
 
 
 def test_question_without_secret_is_sent_as_written(client_as, sent_to_ai):
@@ -141,7 +143,8 @@ def test_old_raw_secret_in_message_is_masked_without_alarm(client_as, sent_to_ai
     assert body["security"]["alarm"] is False
     assert body["security"]["masked"] == DEV_MASKED + 2
     row = _row(body["request_id"], "sanitization")
-    assert row["masked_kinds"] == DEV_KINDS | {"aws_key": 3, "github_token": 2}
+    # The added message's author is one more name.
+    assert row["masked_kinds"] == DEV_KINDS | {"aws_key": 3, "github_token": 2, "person": DEV_PERSONS + 1}
     assert row["alarm"] is False
 
 
@@ -153,16 +156,19 @@ def test_secrets_masked_at_sync_count_once(client_as, sent_to_ai):
     assert redacted_in_messages >= 1, "the .env message of #dev must go to the AI with [REDACTED]"
     assert body["security"]["masked"] == DEV_MASKED  # not counted again at question time
     row = _row(body["request_id"], "sanitization")
-    assert (row["masked_kinds"], row["masked_count"], row["alarm"]) == (DEV_KINDS, DEV_MASKED, False)
+    assert (row["masked_kinds"], row["masked_count"], row["alarm"]) == (
+        DEV_KINDS | {"person": DEV_PERSONS}, DEV_MASKED + DEV_PERSONS, False,
+    )
 
 
-def test_other_channel_without_secrets_counts_zero(client_as, sent_to_ai):
+def test_other_channel_counts_personal_data_not_names(client_as, sent_to_ai):
     r = s.ask(client_as("ali"), "#genel'i özetle")
     assert r.status_code == 200
     body = r.json()
-    assert body["security"] == {"blocked": 0, "masked": 0, "suspicious": 0, "alarm": False}
+    # #genel has no secret, two phone numbers (counted on the screen) and 7 people names (only in the event).
+    assert body["security"] == {"blocked": 0, "masked": 2, "suspicious": 0, "alarm": False}
     row = _row(body["request_id"], "sanitization")
-    assert (row["masked_kinds"], row["masked_count"]) == ({}, 0)
+    assert (row["masked_kinds"], row["masked_count"]) == ({"person": 7, "phone": 2}, 9)
 
 
 # --- The event rows
@@ -395,7 +401,10 @@ def test_removed_message_is_not_sent_and_not_counted(client_as, sent_to_ai, monk
     assert len(body["sources"]) == DEV_MESSAGES - 1
     assert body["security"] == {"blocked": 0, "masked": 0, "suspicious": 1, "alarm": False}
     row = _row(body["request_id"], "sanitization")
-    assert (row["suspicious_count"], row["masked_kinds"], row["masked_count"]) == (1, {}, 0)
+    # The names of the 26 messages sent count; the removed message's author does not.
+    assert (row["suspicious_count"], row["masked_kinds"], row["masked_count"]) == (
+        1, {"person": DEV_PERSONS - 1}, DEV_PERSONS - 1,
+    )
     assert _row(body["request_id"], "ask_ai")["message_count"] == DEV_MESSAGES - 1
 
 

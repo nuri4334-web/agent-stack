@@ -110,8 +110,9 @@ def test_event_time_is_the_given_time_in_utc_and_counts_stay_zero(fixture_accoun
     for step, created_at, duration_ms, *counts in rows:
         assert created_at == "2026-11-04T09:30:00+00:00"
         assert duration_ms >= 0
-        # S3-08: the sanitization row counts the 7 secrets masked at sync in the #dev .env message of the seed.
-        assert counts == ([0, 0, 0, 0, 7, 0] if step == "sanitization" else [0] * 6)
+        # S3-08: the sanitization row counts the 7 secrets masked at sync in the #dev .env message of the seed;
+        # S3-12: and the 39 people names (27 message authors + 12 in the texts).
+        assert counts == ([0, 0, 0, 0, 46, 0] if step == "sanitization" else [0] * 6)
 
 
 def test_question_without_channel_name_has_no_channel(fixture_accounts, sent_to_ai):

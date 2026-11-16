@@ -58,15 +58,16 @@ class RequestContext:
     request_id: str = field(default_factory=_new_request_id)
     status: str = "ok"
     readable_channel_ids: tuple[str, ...] | None = None  # None: no authorization decision, so nothing is read
-    selected_messages: list[SourceMessage] = field(default_factory=list)  # masked by the sanitization step
-    sources: list[SourceMessage] = field(default_factory=list)  # the messages really sent to the AI
+    # Message texts, placeholders and (after presentation) real values: never in repr (S3-12).
+    selected_messages: list[SourceMessage] = field(default_factory=list, repr=False)  # masked by the sanitization step
+    sources: list[SourceMessage] = field(default_factory=list, repr=False)  # the messages really sent to the AI
     # The masked question; None until the sanitization step ran, and ask_ai refuses to run without it.
     question_for_ai: str | None = field(default=None, repr=False)
     # One per request, in memory only, never logged or written. The lambda reads the module name at call time.
     vault: Vault = field(default_factory=lambda: Vault(), repr=False)
     sync_secret_counts: dict[str, dict[str, int]] = field(default_factory=dict, repr=False)  # source id -> kind -> count
     masked_kinds: dict[str, int] = field(default_factory=dict)  # sanitization: question + messages sent, names included
-    model_answer: str = ""
+    model_answer: str = field(default="", repr=False)
     model_used: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -138,7 +139,7 @@ def data_selection(c: RequestContext) -> None:
 
 
 # --- 4. Sanitization (S3-08): the question and the selected messages are masked before the AI.
-# Secrets -> [REDACTED] (mask_secrets); personal data and names -> placeholders (Vault, body in S3-12).
+# Secrets -> [REDACTED] (mask_secrets); personal data and names -> placeholders (Vault, S3-12).
 # Runs only after authorization and data selection passed, so an unauthorized request masks nothing.
 # Everything is computed first and written to the context at the end: an error leaves no half result.
 def sanitization(c: RequestContext) -> None:
@@ -252,9 +253,16 @@ def response_check(c: RequestContext) -> None:
     c.answer_masked_kinds = dict(cleaned.secrets)
 
 
-# --- 7. Presentation (Stage 3): name masks are opened, [REDACTED] stays.
+# --- 7. Presentation (S3-12): the placeholders of this request are restored in the answer and the sources (text and
+# author) for the asking person; [REDACTED] stays. Runs after response_check. An error stops the request (500).
 def presentation(c: RequestContext) -> None:
-    pass
+    answer = c.vault.restore(c.model_answer)
+    sources = [
+        source.model_copy(update={"text": c.vault.restore(source.text), "author": c.vault.restore(source.author)})
+        for source in c.sources
+    ]
+    c.model_answer = answer
+    c.sources = sources
 
 
 STEPS = [
