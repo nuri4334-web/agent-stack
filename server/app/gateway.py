@@ -18,6 +18,7 @@ from .audit.log import AuditWriteError, write_ai_call, write_event
 from .audit.rules import add_counts, gateway_event, screen_masked
 from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id, split_suspicious
 from .data_selection.selection import member_channel_ids, people_names, question_time_channels, select_messages
+from .database.masked_texts import MaskedTextWriteError, write_masked_text
 from .database.schema import connect, create_tables
 from .filters.api import Vault, mask_secrets
 from .filters.output import clean_answer
@@ -169,6 +170,7 @@ def sanitization(c: RequestContext) -> None:
 
 
 # --- 5. Ask the AI (S1-08, Boran): instruction and data go in separate fields.
+# S3-14: the data text is written to masked_texts first; if it cannot be written the AI is not called.
 def ask_ai(c: RequestContext) -> None:
     if c.question_for_ai is None:
         # Defense in depth: never fall back to the unmasked question.
@@ -179,6 +181,7 @@ def ask_ai(c: RequestContext) -> None:
     ]
     data_block = "\n".join(message_lines) if message_lines else "(No messages)"
     data_text = f"User question: {c.question_for_ai}\n\nRelevant messages:\n{data_block}"
+    _write_masked_text(c, data_text)
 
     start = time.perf_counter()
     try:
@@ -205,6 +208,22 @@ def ask_ai(c: RequestContext) -> None:
     c.model_used = response.model
     c.input_tokens = response.input_tokens
     c.output_tokens = response.output_tokens
+
+
+def _write_masked_text(c: RequestContext, masked_text: str) -> None:
+    """Writes the masked data text in its own transaction before the AI call (S3-14).
+
+    If it cannot be written the request stops (500, the AI is not called). The log gets only the request id and the
+    error type; the error raised carries no text.
+    """
+    try:
+        with c.connection:
+            write_masked_text(
+                c.connection, created_at=c.now().isoformat(), request_id=c.request_id, masked_text=masked_text,
+            )
+    except Exception as error:
+        log.error("Failed to write masked text (request %s): %s", c.request_id, type(error).__name__)
+        raise MaskedTextWriteError() from error
 
 
 def _elapsed_ms(start: float) -> float:

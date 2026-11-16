@@ -9,7 +9,7 @@ from tests.auth_clients import TEST_PASSWORD
 
 TABLES = {
     "people", "linked_accounts", "slack_users", "channels",
-    "channel_memberships", "messages", "audit_events", "ai_calls", "sessions",
+    "channel_memberships", "messages", "audit_events", "ai_calls", "sessions", "masked_texts",
 }
 TOKEN_HASH = "ab" * 32
 TIME = "2026-10-22T14:05:00+03:00"
@@ -92,7 +92,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -105,13 +105,13 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 7")
+    connection.execute("PRAGMA user_version = 8")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()
 
 
-@pytest.mark.parametrize("old_version", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("old_version", [1, 2, 3, 4, 5, 6])
 def test_older_schema_version_is_rejected(old_version):
     connection = connect(":memory:")
     connection.execute(f"PRAGMA user_version = {old_version}")
@@ -226,6 +226,30 @@ def test_ai_result_limited(db):
     for result in ["PROVIDER_ERROR", "failed", ""]:
         with pytest.raises(sqlite3.IntegrityError):
             _add_ai_call(db, result=result)
+
+
+def _add_masked_text(db, **fields):
+    row = {"created_at": TIME, "request_id": "3f9c2a1b7d4e", "masked_text": "User question: PERSON_1"} | fields
+    _insert(db, "masked_texts", row)
+
+
+def test_masked_texts_table_is_strict_with_checks(db):
+    """S3-14: only the request id, the time and the masked text; STRICT; the checks reject bad rows."""
+    assert _columns(db, "masked_texts") == {"id", "request_id", "created_at", "masked_text"}
+    assert db.execute("SELECT strict FROM pragma_table_list WHERE name = 'masked_texts'").fetchone() == (1,)
+    _add_masked_text(db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_masked_text(db)  # one row per request
+    for fields in [
+        {"request_id": "3F9C2A1B7D4F"}, {"request_id": ""}, {"request_id": "a" * 65}, {"request_id": "req 1"},
+        {"request_id": "a2", "masked_text": ""}, {"request_id": "a3", "masked_text": None},
+        {"request_id": "a4", "created_at": None},
+    ]:
+        with pytest.raises(sqlite3.IntegrityError):
+            _add_masked_text(db, **fields)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_masked_text(db, request_id="a5", masked_text=b"\x01\x02")  # STRICT: bytes are not text
+    assert db.execute("SELECT count(*) FROM masked_texts").fetchone() == (1,)
 
 
 def test_new_channel_default_excluded(db):

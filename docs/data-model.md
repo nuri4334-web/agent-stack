@@ -4,7 +4,7 @@ The server's SQLite tables. Sprint 1 · S1-03; accounts and sessions: Sprint 2 �
 
 - The database is opened with Python's own `sqlite3` module; there is no extra package, ORM or migration tool.
 - The file location is the `DATABASE_PATH` setting in `.env` (a relative path is resolved from the repo root). Tests use an in-memory (`:memory:`) database or a seeded database in a temporary folder; they never touch the real file.
-- The schema version is kept in `PRAGMA user_version`; the current version is **6** (S3-08: `audit_events.masked_kinds` and `audit_events.alarm`; version 5, S3-05: `messages.secret_counts`; version 4, S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
+- The schema version is kept in `PRAGMA user_version`; the current version is **7** (S3-14: the `masked_texts` table; version 6, S3-08: `audit_events.masked_kinds` and `audit_events.alarm`; version 5, S3-05: `messages.secret_counts`; version 4, S2-02: accounts in `people`, the `sessions` table, `login`/`logout` steps; version 3, MIG-B: channel status `blocked`, no name rule in the table). If the database version is higher than the code's, the tables are not created and an error is raised. If it is lower (and not 0), an error is raised too: delete the database file and load the seed again (no migration code).
 - All tables are `STRICT` (a value of the wrong type is rejected; at least SQLite 3.38.0 is needed: 3.37 for `STRICT`, 3.38 for the built-in JSON functions of the `secret_counts` check).
 - Time fields are ISO 8601 text (e.g. `2026-10-22T14:05:00+03:00`). The database does not fill in the time itself; the writing code always gives the time.
 - There is no cascading delete (`ON DELETE CASCADE`).
@@ -215,6 +215,24 @@ Signed-in sessions (used from S2-03). The session token itself (the cookie value
 
 Times are ISO 8601 text in UTC (`+00:00`), given by the writing code. `set-password` and `deactivate` delete all sessions of the person. Expired sessions are rejected and deleted by the login code (S2-03); this version has no clean-up job.
 
+## 10. `masked_texts`
+
+The exact data text the gateway sends to the AI, after masking (S3-14, schema version 7), so it can later be proven what the AI saw in a request. This table is not part of the audit log.
+
+| Field | Description |
+|---|---|
+| `id` | Number id of the row. |
+| `request_id` | The request (same value as `audit_events.request_id`); lower case hex, at most 64 characters; **unique**: one row per request. |
+| `created_at` | When the row was written, right before the AI call (ISO 8601, given by the code); used for the 7-day deletion (Stage 6, index `masked_texts_created_at`). |
+| `masked_text` | The `data` text given to the AI, character for character: the masked question and the message lines (channel, author, time, text). Secrets are `[REDACTED]`, personal data and names are placeholders (`EMAIL_1`, `PERSON_1`). Cannot be empty. The fixed system instruction is not written. |
+
+- Written in `gateway.ask_ai`, after the masked text is built and before the AI call, in its own committed transaction. The unmasked question can never be written: `ask_ai` refuses to run before the sanitization step.
+- The Vault mapping (placeholder → real value) is never written, so the table alone cannot be restored. No other column (person, channel) is kept; the person can be found through `request_id` in `audit_events`.
+- No row is written when nothing goes to the AI: no session, no access, no Slack data, no messages, or an error before `ask_ai`.
+- If the AI call fails (`TIMEOUT`, `PROVIDER_ERROR`) the row stays: it is the text that was sent.
+- **If the row cannot be written, the request stops:** the AI is not called, no `ai_calls` row is written, the `ask_ai` event is `stopped` with an empty `reason_code` and the answer is 500 `SERVER_ERROR` (same rule as the audit events). The server log gets only the request id and the error type.
+- The 7-day deletion (Stage 6) and the view in the admin panel (Stage 4) are not built yet. `check_db` scans this table too.
+
 ## Accounts (S2-02)
 
 Code: `server/app/accounts/` (`rules.py` pure rules, `store.py` database, `commands.py` command line). Commands run inside `server/`, only on the server:
@@ -276,9 +294,9 @@ Raw secret check (S3-05), the proof that the database keeps no secret:
 .venv/Scripts/python -m app.database.check_db [--db PATH]
 ```
 
-- Scans every `messages.clean_text` (the only column with message text) with the same secret rules as sync and load (`find_secrets` on the normalized text). Every finding counts, certain or suspicious.
+- Scans every `messages.clean_text` (the only column with message text) and every `masked_texts.masked_text` (S3-14) with the same secret rules as sync and load (`find_secrets` on the normalized text). Every finding counts, certain or suspicious.
 - Opens the database read only; it never creates, changes or fixes anything. To fix a finding, delete the database and run `seed load` or sync again.
-- Prints only `message <id>: <kind>` per finding and a last line (`0 raw secrets.` or e.g. `2 raw secrets in 1 message.`); never a value or message text.
+- Prints a first line (`Checked 27 messages and 1 masked text.`), `message <id>: <kind>` or `masked text <id>: <kind>` per finding and a last line (`0 raw secrets.`, or e.g. `2 raw secrets in 1 message.`, `2 raw secrets in 1 message and 1 masked text.`); never a value or any text.
 - Exit codes: 0 no raw secret, 1 at least one, 2 the check could not run (no database file, schema version not the code's, a failing rule: `The secret check failed (<error type>).`, wrong usage). It never prints `0 raw secrets.` when the check did not run.
 
 ## Data selection (S1-05)
@@ -307,4 +325,4 @@ Code: `server/app/data_selection/`. The gateway's step 3 (`gateway.data_selectio
 - The foreign key check works only on a connection opened with `connect()`; code that opens the database another way (`sqlite3.connect`) loses this check.
 - The value list of `audit_events.step` (without `slack_sync`, `login`, `logout`) matches `gateway.STEPS` by hand; if a step is added to the gateway, the schema must be updated too (a test catches the difference).
 - Thread replies, attachments and files are out of scope.
-- A separate table for the masked text sent to the AI will be added in Stage 3.
+- The rows of `masked_texts` are not deleted yet; the 7-day deletion comes in Stage 6.

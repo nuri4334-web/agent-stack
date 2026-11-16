@@ -58,13 +58,13 @@ Inside `server/`, with the venv:
 ```
 
 `--days` default is 30; the demo messages were written on 22 October 2026, so to get them in a real sync after about 21 November, increase `--days` or use the seed.
-The schema version is 6 (S3-08: `masked_kinds` and `alarm` in `audit_events`). If you have an older local database, the
+The schema version is 7 (S3-14: the `masked_texts` table). If you have an older local database, the
 server does not start: delete `server/agentstack.db`, run `seed load` again and create the demo accounts again (see "Accounts").
 Sync and `seed load` mask secrets before writing (`[REDACTED]`). At question time the gateway masks the question and the
 selected messages again before the AI (sanitization step, S3-08). Personal data and people names go to the AI as
 placeholders (`EMAIL_1`, `PERSON_1`) and are restored in the answer and the sources for the asking person (S3-12);
-`[REDACTED]` is never restored. To prove that the database keeps no raw secret
-(read only; exit 0 clean, 1 found, 2 could not check; it prints only message ids and kinds, never a value):
+`[REDACTED]` is never restored. To prove that the database keeps no raw secret in messages and masked texts
+(read only; exit 0 clean, 1 found, 2 could not check; it prints only row ids and kinds, never a value):
 
 ```
 .venv/Scripts/python -m app.database.check_db
@@ -158,6 +158,12 @@ AI is not called if it has not been called yet: nothing runs without a record. T
 request id and the error type. Two records are different on purpose: if a login or logout event or an `ai_calls` row
 cannot be written, the login or the answer still works and the error is logged.
 Details: [`docs/data-model.md`](../docs/data-model.md) (section 7).
+
+The masked text sent to the AI (secrets `[REDACTED]`, personal data and names as `EMAIL_1` / `PERSON_1`) is not in the
+audit log: it goes to the separate `masked_texts` table (S3-14), one row per question, written right before the AI call,
+so it can later be proven what the AI saw. The real values (the Vault mapping) are never written. No row is written when
+nothing goes to the AI (no access, no messages). If the row cannot be written, the question stops with 500
+`SERVER_ERROR` and the AI is not called, like the audit events. Details: `docs/data-model.md` (section 10).
 
 ## Demo 1 setup
 

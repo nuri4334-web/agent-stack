@@ -4,6 +4,7 @@ Messages have no raw text column; the audit log has no message text or free text
 Passwords are kept only as a scrypt hash, session tokens only as a SHA-256 hash (S2-02).
 Each message keeps how many secrets of each kind were masked before it was written (secret_counts, S3-05); never a value.
 Each audit event keeps the kinds it masked (masked_kinds) and whether the question had a secret (alarm, S3-08); never a value.
+The masked text sent to the AI is kept only in masked_texts (S3-14); never a Vault mapping or a value.
 Details: docs/data-model.md
 """
 import sqlite3
@@ -12,7 +13,7 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Lowest SQLite version: STRICT tables (3.37) and the built-in JSON functions of the secret_counts check (3.38).
 MIN_SQLITE_VERSION = (3, 38, 0)
@@ -158,6 +159,17 @@ CREATE TABLE IF NOT EXISTS ai_calls (
     output_tokens  INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS ai_calls_request ON ai_calls (request_id);
+
+CREATE TABLE IF NOT EXISTS masked_texts (
+    id           INTEGER PRIMARY KEY,
+    request_id   TEXT NOT NULL UNIQUE CHECK (
+                     length(request_id) BETWEEN 1 AND 64
+                     AND request_id NOT GLOB '*[^0-9a-f]*'
+                 ),
+    created_at   TEXT NOT NULL,
+    masked_text  TEXT NOT NULL CHECK (length(masked_text) > 0)
+) STRICT;
+CREATE INDEX IF NOT EXISTS masked_texts_created_at ON masked_texts (created_at);
 """
 
 
