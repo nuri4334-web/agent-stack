@@ -1,5 +1,13 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { API_URL, askQuestion, getAdminEvents, getCurrentUser, login, logout } from './api';
+import {
+  SECRET_ALARM_WARNING,
+  formatMaskedKinds,
+  getDisplayedQuestion,
+  getEventKey,
+  groupEventsByRequestId,
+  normalizeSecuritySummary,
+} from './security';
 
 function formatLocalTime(isoString) {
   if (!isoString) return '—';
@@ -8,71 +16,334 @@ function formatLocalTime(isoString) {
   return date.toLocaleString();
 }
 
-function getEventKey(ev) {
-  if (ev.id) return String(ev.id);
-  return `${ev.created_at}-${ev.request_id || 'no-req'}-${ev.step}-${ev.person || 'anon'}-${ev.duration_ms}`;
+function renderDecisionBadge(decision, alarm = false) {
+  const isStopped = decision === 'stopped' || decision === 'error';
+  return (
+    <span style={{ whiteSpace: 'nowrap' }}>
+      <span
+        style={{
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: '999px',
+          fontSize: '12px',
+          fontWeight: 600,
+          backgroundColor: isStopped ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.15)',
+          color: isStopped ? '#FCA5A5' : '#86EFAC',
+          border: `1px solid ${isStopped ? '#EF4444' : '#22C55E'}`,
+        }}
+      >
+        {decision}
+      </span>
+      {alarm === true && <span className="alarm-badge">ALARM</span>}
+    </span>
+  );
 }
 
-function groupEventsByRequestId(events) {
-  const groups = [];
-  const byRequestId = new Map();
+export function SecurityEventsTable({
+  events,
+  groupByRequest = false,
+  expandedRequests = {},
+  onToggleExpand,
+}) {
+  const groupedEvents = groupByRequest ? groupEventsByRequestId(events) : [];
 
-  for (const ev of events) {
-    if (!ev.request_id) {
-      groups.push({
-        groupKey: getEventKey(ev),
-        request_id: null,
-        latest_at: ev.created_at,
-        person: ev.person,
-        channel: ev.channel,
-        decision: ev.decision,
-        reason_code: ev.reason_code,
-        duration_ms: ev.duration_ms || 0,
-        message_count: ev.message_count || 0,
-        blocked_count: ev.blocked_count || 0,
-        masked_count: ev.masked_count || 0,
-        suspicious_count: ev.suspicious_count || 0,
-        steps: [ev],
-      });
-      continue;
-    }
+  return (
+    <div className="table-container">
+      <table className="events-table">
+        <thead>
+          <tr
+            style={{
+              borderBottom: '1px solid #334155',
+              color: '#94A3B8',
+            }}
+          >
+            <th>Time</th>
+            <th>Request ID</th>
+            <th>Person</th>
+            <th>Channel</th>
+            <th>Step</th>
+            <th>Decision</th>
+            <th>Reason Code</th>
+            <th>Duration (ms)</th>
+            <th>Counts (Msg / Blk / Msk / Susp)</th>
+            <th>Masked Kinds</th>
+          </tr>
+        </thead>
+        <tbody>
+          {!groupByRequest
+            ? events.map((ev) => {
+                const isStopped = ev.decision === 'stopped' || ev.decision === 'error';
+                const isAlarm = ev.alarm === true;
+                const kindsText = formatMaskedKinds(ev.masked_kinds);
+                return (
+                  <tr
+                    key={getEventKey(ev)}
+                    data-alarm={isAlarm ? 'true' : 'false'}
+                    style={{
+                      borderBottom: '1px solid #1E293B',
+                      backgroundColor: isStopped
+                        ? 'rgba(239, 68, 68, 0.12)'
+                        : isAlarm
+                          ? 'rgba(245, 158, 11, 0.12)'
+                          : 'transparent',
+                    }}
+                  >
+                    <td style={{ whiteSpace: 'nowrap' }}>{formatLocalTime(ev.created_at)}</td>
+                    <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      {ev.request_id || '—'}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{ev.person || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {ev.channel ? `#${ev.channel}` : '—'}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{ev.step}</td>
+                    <td>{renderDecisionBadge(ev.decision, isAlarm)}</td>
+                    <td
+                      style={{
+                        fontFamily: 'monospace',
+                        color: isStopped ? '#FCA5A5' : '#CBD5E1',
+                      }}
+                    >
+                      {ev.reason_code || '—'}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {typeof ev.duration_ms === 'number'
+                        ? `${ev.duration_ms.toFixed(2)} ms`
+                        : '—'}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {ev.message_count} / {ev.blocked_count} / {ev.masked_count} /{' '}
+                      {ev.suspicious_count}
+                    </td>
+                    <td
+                      style={{
+                        fontFamily: kindsText ? 'monospace' : 'inherit',
+                        color: kindsText ? '#FDE68A' : '#94A3B8',
+                      }}
+                    >
+                      {kindsText || '—'}
+                    </td>
+                  </tr>
+                );
+              })
+            : groupedEvents.map((group) => {
+                const isStopped = group.decision === 'stopped' || group.decision === 'error';
+                const isAlarm = group.alarm === true;
+                const kindsText = formatMaskedKinds(group.masked_kinds);
+                const canExpand = Boolean(group.request_id && group.steps.length > 1);
+                const isExpanded = Boolean(
+                  group.request_id && expandedRequests[group.request_id],
+                );
+                return (
+                  <Fragment key={group.groupKey}>
+                    <tr
+                      data-alarm={isAlarm ? 'true' : 'false'}
+                      onClick={
+                        canExpand && onToggleExpand
+                          ? () => onToggleExpand(group.request_id)
+                          : undefined
+                      }
+                      style={{
+                        borderBottom: '1px solid #1E293B',
+                        cursor: canExpand ? 'pointer' : 'default',
+                        backgroundColor: isStopped
+                          ? 'rgba(239, 68, 68, 0.12)'
+                          : isAlarm
+                            ? 'rgba(245, 158, 11, 0.12)'
+                            : 'transparent',
+                      }}
+                    >
+                      <td style={{ whiteSpace: 'nowrap' }}>{formatLocalTime(group.latest_at)}</td>
+                      <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                        {canExpand ? (isExpanded ? '▼ ' : '▶ ') : ''}
+                        {group.request_id || '—'}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>{group.person || '—'}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {group.channel ? `#${group.channel}` : '—'}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {group.steps.length > 1
+                          ? `${group.steps.length} steps`
+                          : group.steps[0]?.step}
+                      </td>
+                      <td>{renderDecisionBadge(group.decision, isAlarm)}</td>
+                      <td
+                        style={{
+                          fontFamily: 'monospace',
+                          color: isStopped ? '#FCA5A5' : '#CBD5E1',
+                        }}
+                      >
+                        {group.reason_code || '—'}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{group.duration_ms.toFixed(2)} ms</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {group.message_count} / {group.blocked_count} / {group.masked_count} /{' '}
+                        {group.suspicious_count}
+                      </td>
+                      <td
+                        style={{
+                          fontFamily: kindsText ? 'monospace' : 'inherit',
+                          color: kindsText ? '#FDE68A' : '#94A3B8',
+                        }}
+                      >
+                        {kindsText || '—'}
+                      </td>
+                    </tr>
+                    {isExpanded &&
+                      group.steps.map((stepEv) => {
+                        const stepStopped =
+                          stepEv.decision === 'stopped' || stepEv.decision === 'error';
+                        const stepAlarm = stepEv.alarm === true;
+                        const stepKindsText = formatMaskedKinds(stepEv.masked_kinds);
+                        return (
+                          <tr
+                            key={getEventKey(stepEv)}
+                            data-alarm={stepAlarm ? 'true' : 'false'}
+                            style={{
+                              borderBottom: '1px solid #1E293B',
+                              backgroundColor: stepStopped
+                                ? 'rgba(239, 68, 68, 0.18)'
+                                : stepAlarm
+                                  ? 'rgba(245, 158, 11, 0.16)'
+                                  : 'rgba(15, 23, 42, 0.6)',
+                              fontSize: '12px',
+                            }}
+                          >
+                            <td
+                              style={{
+                                paddingLeft: '20px',
+                                color: '#94A3B8',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {formatLocalTime(stepEv.created_at)}
+                            </td>
+                            <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                              ↳ step
+                            </td>
+                            <td>{stepEv.person || '—'}</td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {stepEv.channel ? `#${stepEv.channel}` : '—'}
+                            </td>
+                            <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                              {stepEv.step}
+                            </td>
+                            <td>{renderDecisionBadge(stepEv.decision, stepAlarm)}</td>
+                            <td style={{ fontFamily: 'monospace' }}>
+                              {stepEv.reason_code || '—'}
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {typeof stepEv.duration_ms === 'number'
+                                ? `${stepEv.duration_ms.toFixed(2)} ms`
+                                : '—'}
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {stepEv.message_count} / {stepEv.blocked_count} /{' '}
+                              {stepEv.masked_count} / {stepEv.suspicious_count}
+                            </td>
+                            <td
+                              style={{
+                                fontFamily: stepKindsText ? 'monospace' : 'inherit',
+                                color: stepKindsText ? '#FDE68A' : '#94A3B8',
+                              }}
+                            >
+                              {stepKindsText || '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </Fragment>
+                );
+              })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-    let group = byRequestId.get(ev.request_id);
-    if (!group) {
-      group = {
-        groupKey: `req-${ev.request_id}-${ev.created_at}`,
-        request_id: ev.request_id,
-        latest_at: ev.created_at,
-        person: ev.person,
-        channel: ev.channel,
-        decision: ev.decision,
-        reason_code: ev.reason_code,
-        duration_ms: 0,
-        message_count: 0,
-        blocked_count: 0,
-        masked_count: 0,
-        suspicious_count: 0,
-        steps: [],
-      };
-      byRequestId.set(ev.request_id, group);
-      groups.push(group);
-    }
+export function ChatAnswerView({ answerData }) {
+  if (!answerData) return null;
 
-    group.steps.push(ev);
-    group.duration_ms += Number(ev.duration_ms) || 0;
-    if (!group.person && ev.person) group.person = ev.person;
-    if (!group.channel && ev.channel) group.channel = ev.channel;
-    if (ev.decision === 'stopped' || ev.decision === 'error') {
-      group.decision = ev.decision;
-      if (ev.reason_code) group.reason_code = ev.reason_code;
-    }
-    group.message_count = Math.max(group.message_count, ev.message_count || 0);
-    group.blocked_count += ev.blocked_count || 0;
-    group.masked_count += ev.masked_count || 0;
-    group.suspicious_count += ev.suspicious_count || 0;
-  }
+  const isNoAccess = answerData.status === 'no_access';
+  const sources = Array.isArray(answerData.sources) ? answerData.sources : [];
+  const security = normalizeSecuritySummary(answerData.security);
 
-  return groups;
+  return (
+    <div style={{ marginTop: '20px' }}>
+      {security.alarm && (
+        <div
+          className="meta-box alarm-warning-box"
+          role="alert"
+          style={{
+            marginTop: 0,
+            marginBottom: '12px',
+            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid #F59E0B',
+            color: '#FDE68A',
+            padding: '12px 16px',
+            borderRadius: '8px',
+            lineHeight: '1.5',
+          }}
+        >
+          {SECRET_ALARM_WARNING}
+        </div>
+      )}
+
+      {isNoAccess ? (
+        <div
+          className="meta-box"
+          role="status"
+          style={{
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            border: '1px solid #F59E0B',
+            color: '#FDE68A',
+            padding: '16px',
+            borderRadius: '8px',
+            lineHeight: '1.5',
+          }}
+        >
+          <strong>Access Restricted: </strong>
+          {answerData.answer}
+        </div>
+      ) : (
+        <div
+          style={{
+            backgroundColor: '#0F172A',
+            border: '1px solid #334155',
+            padding: '16px',
+            borderRadius: '8px',
+            lineHeight: '1.5',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {/* Plain text display */}
+          {answerData.answer}
+        </div>
+      )}
+
+      <div className="meta-box">
+        <strong>Messages It Is Based On (Sources):</strong>
+        {sources.length === 0 ? (
+          <div>No sources</div>
+        ) : (
+          <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
+            {sources.map((s) => (
+              <li key={s.id}>
+                #{s.channel} — {s.author} ({formatLocalTime(s.time)}): &quot;{s.text}&quot;
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="meta-box">
+        <strong>Security Summary: </strong>
+        Blocked: {security.blocked} | Masked: {security.masked} | Suspicious:{' '}
+        {security.suspicious}
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -246,6 +517,9 @@ export default function App() {
 
     try {
       const result = await askQuestion(trimmed);
+      if (result?.security?.alarm === true) {
+        setSentQuestion('[REDACTED]');
+      }
       setAnswerData(result);
     } catch (err) {
       if (err?.status === 401) {
@@ -271,32 +545,10 @@ export default function App() {
     }));
   };
 
-  const isNoAccess = answerData?.status === 'no_access';
-  const sources = Array.isArray(answerData?.sources) ? answerData.sources : [];
-  const security = answerData?.security || { blocked: 0, masked: 0, suspicious: 0 };
+  const security = normalizeSecuritySummary(answerData?.security);
+  const displayedQuestion = getDisplayedQuestion(sentQuestion, security);
   const displayName = currentUser?.name || currentUser?.username || '';
   const avatarText = (displayName || 'U').slice(0, 2).toUpperCase();
-  const groupedEvents = groupByRequest ? groupEventsByRequestId(events) : [];
-
-  const renderDecisionBadge = (decision) => {
-    const isStopped = decision === 'stopped' || decision === 'error';
-    return (
-      <span
-        style={{
-          display: 'inline-block',
-          padding: '2px 8px',
-          borderRadius: '999px',
-          fontSize: '12px',
-          fontWeight: 600,
-          backgroundColor: isStopped ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.15)',
-          color: isStopped ? '#FCA5A5' : '#86EFAC',
-          border: `1px solid ${isStopped ? '#EF4444' : '#22C55E'}`,
-        }}
-      >
-        {decision}
-      </span>
-    );
-  };
 
   return (
     <div>
@@ -448,7 +700,7 @@ export default function App() {
             </form>
           </div>
         ) : activePage === 'panel' ? (
-          /* PAGE 3: SECURITY PANEL (S2-09) */
+          /* PAGE 3: SECURITY PANEL (S2-09 / S3-11) */
           <div className="card">
             <div
               style={{
@@ -515,197 +767,12 @@ export default function App() {
             )}
 
             {!eventsError && events.length > 0 && (
-              <div style={{ marginTop: '16px', overflowX: 'auto' }}>
-                <table
-                  style={{
-                    width: '100%',
-                    borderCollapse: 'collapse',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                  }}
-                >
-                  <thead>
-                    <tr
-                      style={{
-                        borderBottom: '1px solid #334155',
-                        color: '#94A3B8',
-                      }}
-                    >
-                      <th style={{ padding: '10px 8px' }}>Time</th>
-                      <th style={{ padding: '10px 8px' }}>Request ID</th>
-                      <th style={{ padding: '10px 8px' }}>Person</th>
-                      <th style={{ padding: '10px 8px' }}>Channel</th>
-                      <th style={{ padding: '10px 8px' }}>Step</th>
-                      <th style={{ padding: '10px 8px' }}>Decision</th>
-                      <th style={{ padding: '10px 8px' }}>Reason Code</th>
-                      <th style={{ padding: '10px 8px' }}>Duration (ms)</th>
-                      <th style={{ padding: '10px 8px' }}>Counts (Msg / Blk / Msk / Susp)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!groupByRequest
-                      ? events.map((ev) => {
-                          const isStopped = ev.decision === 'stopped' || ev.decision === 'error';
-                          return (
-                            <tr
-                              key={getEventKey(ev)}
-                              style={{
-                                borderBottom: '1px solid #1E293B',
-                                backgroundColor: isStopped
-                                  ? 'rgba(239, 68, 68, 0.12)'
-                                  : 'transparent',
-                              }}
-                            >
-                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                {formatLocalTime(ev.created_at)}
-                              </td>
-                              <td style={{ padding: '10px 8px', fontFamily: 'monospace' }}>
-                                {ev.request_id || '—'}
-                              </td>
-                              <td style={{ padding: '10px 8px', fontWeight: 600 }}>
-                                {ev.person || '—'}
-                              </td>
-                              <td style={{ padding: '10px 8px' }}>
-                                {ev.channel ? `#${ev.channel}` : '—'}
-                              </td>
-                              <td style={{ padding: '10px 8px' }}>{ev.step}</td>
-                              <td style={{ padding: '10px 8px' }}>
-                                {renderDecisionBadge(ev.decision)}
-                              </td>
-                              <td
-                                style={{
-                                  padding: '10px 8px',
-                                  fontFamily: 'monospace',
-                                  color: isStopped ? '#FCA5A5' : '#CBD5E1',
-                                }}
-                              >
-                                {ev.reason_code || '—'}
-                              </td>
-                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                {typeof ev.duration_ms === 'number'
-                                  ? `${ev.duration_ms.toFixed(2)} ms`
-                                  : '—'}
-                              </td>
-                              <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                {ev.message_count} / {ev.blocked_count} / {ev.masked_count} /{' '}
-                                {ev.suspicious_count}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      : groupedEvents.map((group) => {
-                          const isStopped =
-                            group.decision === 'stopped' || group.decision === 'error';
-                          const canExpand = Boolean(group.request_id && group.steps.length > 1);
-                          const isExpanded = Boolean(
-                            group.request_id && expandedRequests[group.request_id],
-                          );
-                          return (
-                            <Fragment key={group.groupKey}>
-                              <tr
-                                onClick={
-                                  canExpand
-                                    ? () => toggleRequestExpand(group.request_id)
-                                    : undefined
-                                }
-                                style={{
-                                  borderBottom: '1px solid #1E293B',
-                                  cursor: canExpand ? 'pointer' : 'default',
-                                  backgroundColor: isStopped
-                                    ? 'rgba(239, 68, 68, 0.12)'
-                                    : 'transparent',
-                                }}
-                              >
-                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                  {formatLocalTime(group.latest_at)}
-                                </td>
-                                <td style={{ padding: '10px 8px', fontFamily: 'monospace' }}>
-                                  {canExpand ? (isExpanded ? '▼ ' : '▶ ') : ''}
-                                  {group.request_id || '—'}
-                                </td>
-                                <td style={{ padding: '10px 8px', fontWeight: 600 }}>
-                                  {group.person || '—'}
-                                </td>
-                                <td style={{ padding: '10px 8px' }}>
-                                  {group.channel ? `#${group.channel}` : '—'}
-                                </td>
-                                <td style={{ padding: '10px 8px' }}>
-                                  {group.steps.length > 1
-                                    ? `${group.steps.length} steps`
-                                    : group.steps[0]?.step}
-                                </td>
-                                <td style={{ padding: '10px 8px' }}>
-                                  {renderDecisionBadge(group.decision)}
-                                </td>
-                                <td
-                                  style={{
-                                    padding: '10px 8px',
-                                    fontFamily: 'monospace',
-                                    color: isStopped ? '#FCA5A5' : '#CBD5E1',
-                                  }}
-                                >
-                                  {group.reason_code || '—'}
-                                </td>
-                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                  {group.duration_ms.toFixed(2)} ms
-                                </td>
-                                <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>
-                                  {group.message_count} / {group.blocked_count} /{' '}
-                                  {group.masked_count} / {group.suspicious_count}
-                                </td>
-                              </tr>
-                              {isExpanded &&
-                                group.steps.map((stepEv) => {
-                                  const stepStopped =
-                                    stepEv.decision === 'stopped' || stepEv.decision === 'error';
-                                  return (
-                                    <tr
-                                      key={getEventKey(stepEv)}
-                                      style={{
-                                        borderBottom: '1px solid #1E293B',
-                                        backgroundColor: stepStopped
-                                          ? 'rgba(239, 68, 68, 0.18)'
-                                          : 'rgba(15, 23, 42, 0.6)',
-                                        fontSize: '12px',
-                                      }}
-                                    >
-                                      <td style={{ padding: '8px 8px 8px 24px', color: '#94A3B8' }}>
-                                        {formatLocalTime(stepEv.created_at)}
-                                      </td>
-                                      <td style={{ padding: '8px', fontFamily: 'monospace' }}>
-                                        ↳ step
-                                      </td>
-                                      <td style={{ padding: '8px' }}>{stepEv.person || '—'}</td>
-                                      <td style={{ padding: '8px' }}>
-                                        {stepEv.channel ? `#${stepEv.channel}` : '—'}
-                                      </td>
-                                      <td style={{ padding: '8px', fontWeight: 600 }}>
-                                        {stepEv.step}
-                                      </td>
-                                      <td style={{ padding: '8px' }}>
-                                        {renderDecisionBadge(stepEv.decision)}
-                                      </td>
-                                      <td style={{ padding: '8px', fontFamily: 'monospace' }}>
-                                        {stepEv.reason_code || '—'}
-                                      </td>
-                                      <td style={{ padding: '8px' }}>
-                                        {typeof stepEv.duration_ms === 'number'
-                                          ? `${stepEv.duration_ms.toFixed(2)} ms`
-                                          : '—'}
-                                      </td>
-                                      <td style={{ padding: '8px' }}>
-                                        {stepEv.message_count} / {stepEv.blocked_count} /{' '}
-                                        {stepEv.masked_count} / {stepEv.suspicious_count}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                            </Fragment>
-                          );
-                        })}
-                  </tbody>
-                </table>
-              </div>
+              <SecurityEventsTable
+                events={events}
+                groupByRequest={groupByRequest}
+                expandedRequests={expandedRequests}
+                onToggleExpand={toggleRequestExpand}
+              />
             )}
           </div>
         ) : (
@@ -717,7 +784,7 @@ export default function App() {
                 Connected Server Address (Read from Settings): <code>{API_URL}</code>
               </p>
 
-              {sentQuestion && (
+              {displayedQuestion && (
                 <div style={{ marginTop: '20px', textAlign: 'right' }}>
                   <span
                     style={{
@@ -728,7 +795,7 @@ export default function App() {
                       borderRadius: '10px',
                     }}
                   >
-                    {sentQuestion}
+                    {displayedQuestion}
                   </span>
                 </div>
               )}
@@ -757,63 +824,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Answer, Sources and Security Summary */}
-              {answerData && !typing && (
-                <div style={{ marginTop: '20px' }}>
-                  {isNoAccess ? (
-                    <div
-                      className="meta-box"
-                      role="status"
-                      style={{
-                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                        border: '1px solid #F59E0B',
-                        color: '#FDE68A',
-                        padding: '16px',
-                        borderRadius: '8px',
-                        lineHeight: '1.5',
-                      }}
-                    >
-                      <strong>Access Restricted: </strong>
-                      {answerData.answer}
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        backgroundColor: '#0F172A',
-                        border: '1px solid #334155',
-                        padding: '16px',
-                        borderRadius: '8px',
-                        lineHeight: '1.5',
-                        whiteSpace: 'pre-wrap',
-                      }}
-                    >
-                      {/* Plain text display */}
-                      {answerData.answer}
-                    </div>
-                  )}
-
-                  <div className="meta-box">
-                    <strong>Messages It Is Based On (Sources):</strong>
-                    {sources.length === 0 ? (
-                      <div>No sources</div>
-                    ) : (
-                      <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
-                        {sources.map((s) => (
-                          <li key={s.id}>
-                            #{s.channel} — {s.author} ({formatLocalTime(s.time)}): &quot;{s.text}&quot;
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-
-                  <div className="meta-box">
-                    <strong>Security Summary: </strong>
-                    Blocked: {security.blocked} | Masked: {security.masked} | Suspicious:{' '}
-                    {security.suspicious}
-                  </div>
-                </div>
-              )}
+              {/* Answer, Warning, Sources and Security Summary */}
+              {answerData && !typing && <ChatAnswerView answerData={answerData} />}
 
               <form className="input-row" onSubmit={sendQuestion}>
                 <input
