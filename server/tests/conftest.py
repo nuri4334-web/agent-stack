@@ -5,6 +5,7 @@ import pytest
 
 from app import ai, settings
 from app.data_selection import selection
+from app.filters import injection
 from app.main import app
 from app.slack_connector import seed
 from app.database.schema import connect
@@ -89,6 +90,43 @@ def _session_cookie_secure(monkeypatch):
 def _fixture_password_hash():
     """One real scrypt hash of TEST_PASSWORD per test session (scrypt is slow; its parameters are not lowered)."""
     return hash_password(TEST_PASSWORD)
+
+
+class _NoModelClassifier:
+    """A classifier that never flags: the INJECTION probability is 0.0 for every text, so detect() decides only with
+    the rule layer (a rule hit never changes the score). Nothing is loaded; torch and transformers are not needed."""
+
+    def predict(self, text):
+        return [0.0]
+
+
+def _unavailable_loader():
+    raise injection.DetectorUnavailable("detector unavailable in this test")
+
+
+@pytest.fixture(autouse=True)
+def fake_detector():
+    """In every test the hidden instruction detector uses only the rule layer (injection.matches_rules) and loads no model.
+
+    injection.warm_up() -> True; injection.detect(text) -> InjectionResult(suspicious, score), where suspicious is the
+    rule decision and the score is 0.0. The detector itself is not replaced (only its model loader), so the real
+    flow (normalize, empty text, too long text) stays as in production. A test that sets its own injection._loader
+    (the detector's own tests) still overrides this.
+    """
+    injection._reset_for_tests()
+    injection._loader = _NoModelClassifier
+    yield
+    injection._reset_for_tests()
+
+
+@pytest.fixture
+def detector_unavailable(fake_detector):
+    """The detector does not work: injection.warm_up() -> False and injection.detect(text) -> suspicious=True for every
+    text. Cleaned after the test, so the next test starts with the fake_detector again."""
+    injection._reset_for_tests()
+    injection._loader = _unavailable_loader
+    yield
+    injection._reset_for_tests()
 
 
 @pytest.fixture

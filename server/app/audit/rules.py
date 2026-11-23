@@ -11,7 +11,7 @@ SCREEN_KINDS = frozenset(SECRET_KINDS + PERSONAL_KINDS)
 # Reason codes of the gateway steps (API contract 11); the login codes are written by app/accounts/login.py.
 GATEWAY_REASON_CODES = frozenset({
     "UNAUTHENTICATED", "NO_SLACK_ACCOUNT", "NOT_CHANNEL_MEMBER", "CHANNEL_NOT_ALLOWED",
-    "NO_SLACK_DATA", "NO_MESSAGES", "PROVIDER_ERROR", "TIMEOUT",
+    "NO_SLACK_DATA", "NO_MESSAGES", "SECURITY_CHECK_UNAVAILABLE", "PROVIDER_ERROR", "TIMEOUT",
 })
 
 # Only these steps handle messages; the count of every other step is 0.

@@ -172,7 +172,7 @@ def test_every_refusal_has_the_same_body(client_as, sent_to_ai):
         body = r.json()
         assert body.pop("request_id")
         assert body == {
-            "status": "no_access", "answer": "You don't have access to this information.", "sources": [],
+            "status": "no_access", "answer": "There is no channel you can ask about with this name.", "sources": [],
             "security": {"blocked": 0, "masked": 0, "suspicious": 0, "alarm": False},
         }
     assert sent_to_ai == []

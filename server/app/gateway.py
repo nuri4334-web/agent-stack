@@ -30,7 +30,7 @@ log = logging.getLogger("agentstack")
 # (Stage 4: lambda text: injection.detect(text).suspicious). With None no message is removed.
 SUSPICIOUS_CHECK: Callable[[str], bool] | None = None
 
-NO_ACCESS_ANSWER = "You don't have access to this information."
+NO_ACCESS_ANSWER = "There is no channel you can ask about with this name."
 NO_MESSAGES_ANSWER = "No messages were found for this question."
 
 DEFAULT_SYSTEM_INSTRUCTION = (
