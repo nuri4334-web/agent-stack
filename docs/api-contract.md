@@ -450,7 +450,7 @@ The frontend may show the `error.message` text to the user; messages never conta
 | `NOT_CHANNEL_MEMBER` | authorization | The person's Slack account is not a member of the channel. |
 | `CHANNEL_NOT_ALLOWED` | authorization / data_selection | The channel is not `allowed`. |
 | `NO_SLACK_DATA` | data_selection | The database has no Slack data. |
-| `NO_MESSAGES` | data_selection | No message matched the question. |
+| `NO_MESSAGES` | data_selection, sanitization | No message matched the question, or every selected message was removed as suspicious (S4-02). |
 | `SECURITY_CHECK_UNAVAILABLE` | sanitization | The hidden instruction detector does not work (S4-02). |
 | `PROVIDER_ERROR`, `TIMEOUT` | ask_ai | The AI call failed. |
 

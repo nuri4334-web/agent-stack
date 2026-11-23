@@ -13,6 +13,7 @@ from app import ai, gateway, settings
 from app.data_selection.rules import author_name
 from app.data_selection.selection import select_messages
 from app.database.schema import connect
+from app.filters import injection
 from app.filters.api import Vault
 from app.filters.normalize import normalize
 from app.filters.personal import find_personal
@@ -23,7 +24,7 @@ from tests.auth_clients import BASE_URL, LOGIN_PATH, TEST_PASSWORD
 DEV = s.DEV_CHANNEL_ID
 GENEL = "C0C8ATRM073"
 SERVER_ERROR = {"error": {"code": "SERVER_ERROR", "message": "An unexpected server error occurred."}}
-DEV_PERSONS = 39  # 27 message authors + 12 names in the #dev texts of the seed
+DEV_PERSONS = 37  # 25 authors of the messages sent (S4-02: 2 are removed) + 12 names in the #dev texts of the seed
 
 
 @pytest.fixture(autouse=True)
@@ -144,7 +145,8 @@ def test_ali_dev_ai_sees_person_placeholders_answer_shows_names(client_as, echo_
     names_back = all(name in answer for name in authors)
     assert names_back, "an author name was not restored in the answer"
     assert "PERSON_" not in answer
-    expected = _selected("#dev'i özetle", [DEV])
+    expected = [m for m in _selected("#dev'i özetle", [DEV]) if not injection.detect(m.text).suspicious]
+    assert len(expected) == 25  # S4-02: the 2 suspicious messages are not sent
     assert [m["author"] for m in body["sources"]] == [m.author for m in expected]
     same_texts = [m["text"] for m in body["sources"]] == [normalize(m.text) for m in expected]
     assert same_texts, "a source text is not the stored message text"
@@ -259,7 +261,7 @@ def test_one_vault_per_request_used_for_masking_and_restoring(client_as, sent_to
     assert r.status_code == 200
     assert len(vaults) == 1
     assert vaults[0].mask_calls == 1 + 2 * 27  # the question, then the text and the author of every message
-    assert vaults[0].restore_calls == 1 + 2 * 27  # the answer, then the text and the author of every source
+    assert vaults[0].restore_calls == 1 + 2 * 25  # the answer, then the text and the author of every source (S4-02: 25)
 
 
 @pytest.mark.parametrize("account, channel", [("ali", "yonetim"), ("unlinked", "dev")], ids=["not_member", "unlinked"])

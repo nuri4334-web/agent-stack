@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app import ai, settings
 from app.accounts.rules import verify_password
 from app.database.schema import connect
+from app.filters import injection
 from app.main import app
 from tests.auth_clients import (
     FIXTURE_ACCOUNTS, LOGIN_PATH, MESSAGE_LINE, SESSION_COOKIE, TEST_PASSWORD,
@@ -185,9 +186,10 @@ def test_message_line_pattern_matches_gateway_format(sent_to_ai, client_as):
     lines = block.split("\n")
     texts = _dev_texts()
     matching = [line for line in lines if MESSAGE_LINE.match(line)]
-    assert len(matching) == len(texts) == 27
+    assert len(matching) == len(texts) - 2 == 25  # S4-02: the 2 suspicious messages are not sent
     # Every other line is the continuation of a message text with a line break.
-    assert len(lines) - len(matching) == sum(t.count("\n") for t in texts)
+    sent_texts = [t for t in texts if not injection.detect(t).suspicious]  # S4-02: only these are sent
+    assert len(lines) - len(matching) == sum(t.count("\n") for t in sent_texts)
 
 
 def _cookie_echo_app():

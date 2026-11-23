@@ -19,9 +19,9 @@ def test_ask_returns_contract_compliant_answer(client_as):
     body = r.json()
     assert set(body) == {"request_id", "status", "answer", "sources", "security"}
     assert body["status"] == "ok"
-    assert len(body["sources"]) == 27
+    assert len(body["sources"]) == 25
     assert set(body["sources"][0]) == {"id", "channel", "author", "time", "text"}
-    assert body["security"] == {"blocked": 0, "masked": 7, "suspicious": 0, "alarm": False}
+    assert body["security"] == {"blocked": 0, "masked": 7, "suspicious": 2, "alarm": False}
 
 
 def test_invalid_request_returns_clear_error(client_as):

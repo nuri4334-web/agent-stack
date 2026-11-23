@@ -60,7 +60,7 @@ def test_check_db_clean_database_exit_0(_temporary_database):
         connection.close()
     code, lines = _run()
     assert code == 0
-    assert lines == [f"Checked {count} messages and 0 masked texts.", "0 raw secrets."]
+    assert lines == [f"Checked {count} messages, 0 masked texts and 0 suspicious messages.", "0 raw secrets."]
 
 
 def test_check_db_reports_id_and_kind_never_value(_temporary_database, monkeypatch):
@@ -154,7 +154,7 @@ def test_check_db_scans_masked_texts(_temporary_database, monkeypatch):
     shown = any(SECRET in line or "User question" in line for line in lines)
     assert code == 1
     assert not shown, "masked text is in the output"
-    assert lines[0].endswith(" messages and 1 masked text.")
+    assert lines[0].endswith(" messages, 1 masked text and 0 suspicious messages.")
     assert lines[1:] == [f"masked text {row_id}: slack_token", "1 raw secret in 1 masked text."]
 
 
@@ -176,7 +176,7 @@ def test_check_db_clean_after_secret_question(client_as):
     assert r.status_code == 200
     code, lines = _run()
     assert code == 0
-    assert lines[0].endswith(" messages and 1 masked text.")
+    assert lines[0].endswith(" messages, 1 masked text and 2 suspicious messages.")  # S4-02: D23, D24 removed
     assert lines[-1] == "0 raw secrets."
 
 

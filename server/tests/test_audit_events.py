@@ -86,7 +86,7 @@ def test_full_request_writes_seven_events_in_step_order(fixture_accounts, sent_t
         ("authorization", "passed", None, DEV, 0),
         ("data_selection", "passed", None, DEV, 27),
         ("sanitization", "passed", None, DEV, 0),
-        ("ask_ai", "passed", None, DEV, 27),
+        ("ask_ai", "passed", None, DEV, 25),
         ("response_check", "passed", None, DEV, 0),
         ("presentation", "passed", None, DEV, 0),
     ]
@@ -111,8 +111,9 @@ def test_event_time_is_the_given_time_in_utc_and_counts_stay_zero(fixture_accoun
         assert created_at == "2026-11-04T09:30:00+00:00"
         assert duration_ms >= 0
         # S3-08: the sanitization row counts the 7 secrets masked at sync in the #dev .env message of the seed;
-        # S3-12: and the 39 people names (27 message authors + 12 in the texts).
-        assert counts == ([0, 0, 0, 0, 46, 0] if step == "sanitization" else [0] * 6)
+        # S3-12: and the 37 people names (25 authors of the messages sent + 12 in the texts; S4-02: the 2 removed
+        # messages do not count) and the 2 removed suspicious messages (suspicious_count).
+        assert counts == ([0, 0, 0, 0, 44, 2] if step == "sanitization" else [0] * 6)
 
 
 def test_question_without_channel_name_has_no_channel(fixture_accounts, sent_to_ai):
@@ -120,7 +121,7 @@ def test_question_without_channel_name_has_no_channel(fixture_accounts, sent_to_
     rows = _steps()
     assert len(rows) == 7
     assert {row[3] for row in rows} == {None}
-    assert [row[4] for row in rows] == [0, 0, 33, 0, 33, 0, 0]
+    assert [row[4] for row in rows] == [0, 0, 33, 0, 31, 0, 0]
 
 
 def test_two_named_channels_have_no_channel(fixture_accounts, sent_to_ai):
@@ -193,7 +194,7 @@ def test_ai_error_writes_five_events_and_keeps_502_504(client_as, monkeypatch, c
         ("authorization", "passed", None, DEV, 0),
         ("data_selection", "passed", None, DEV, 27),
         ("sanitization", "passed", None, DEV, 0),
-        ("ask_ai", "stopped", reason, DEV, 27),
+        ("ask_ai", "stopped", reason, DEV, 25),
     ]
     assert len(_query("SELECT id FROM ai_calls")) == 1
 

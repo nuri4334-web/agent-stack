@@ -173,6 +173,14 @@ async def handle_ai_error(_: Request, exc: AIError):
     return error_response(502, "PROVIDER_ERROR", exc.message)
 
 
+@app.exception_handler(gateway.SecurityCheckUnavailable)
+async def handle_security_check_unavailable(_: Request, __: gateway.SecurityCheckUnavailable):
+    return error_response(
+        503, "SECURITY_CHECK_UNAVAILABLE",
+        "The security check is not available right now. Please tell the administrator.",
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_invalid_request(_: Request, __: RequestValidationError):
     return error_response(422, "INVALID_REQUEST", "Invalid request format. See the API contract.")

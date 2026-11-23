@@ -14,6 +14,7 @@ from app.accounts.rules import SignedInPerson
 from app.data_selection import selection as selection_module
 from app.data_selection.selection import select_messages
 from app.database.schema import connect
+from app.filters import injection
 from app.filters.api import Vault
 from tests.auth_clients import FIXTURE_ACCOUNTS, channels_sent_to_ai
 
@@ -115,7 +116,7 @@ def test_ali_question_without_channel_gets_no_yonetim(fixture_accounts, sent_to_
     answer = _ask("ali", QUESTION_NO_CHANNEL)
     assert answer.status == "ok"
     assert {s.channel for s in answer.sources} == {"dev", "genel"}
-    assert len(answer.sources) == 33
+    assert len(answer.sources) == 31
     assert channels_sent_to_ai(sent_to_ai) == [{"dev", "genel"}]
     for (text,) in _query("SELECT clean_text FROM messages WHERE channel_id = ?", (YONETIM,)):
         assert text not in sent_to_ai[0]
@@ -124,7 +125,7 @@ def test_ali_question_without_channel_gets_no_yonetim(fixture_accounts, sent_to_
 def test_ayse_question_without_channel_gets_all_three(fixture_accounts, sent_to_ai):
     answer = _ask("ayse", QUESTION_NO_CHANNEL)
     assert {s.channel for s in answer.sources} == {"dev", "genel", "yonetim"}
-    assert len(answer.sources) == 39
+    assert len(answer.sources) == 37
 
 
 @pytest.mark.parametrize("username", ["unlinked", "admin"])
@@ -140,7 +141,7 @@ def test_admin_role_does_not_open_yonetim(fixture_accounts, sent_to_ai):
 def test_admin_linked_reads_only_own_channels(fixture_accounts, sent_to_ai):
     answer = _ask("admin_linked", "#dev'i özetle")
     assert answer.status == "ok"
-    assert len(answer.sources) == 27
+    assert len(answer.sources) == 25
 
 
 @pytest.mark.parametrize("username", ["ali", "ayse", "admin_linked"])
@@ -180,7 +181,7 @@ def test_every_refusal_has_the_same_body(client_as, sent_to_ai):
 
 def test_sources_over_http_have_the_contract_fields(client_as, sent_to_ai):
     sources = client_as("ali").post(ASK, json={"question": "#dev'i özetle"}).json()["sources"]
-    assert len(sources) == 27
+    assert len(sources) == 25
     for source in sources:
         assert set(source) == {"id", "channel", "author", "time", "text"}
         assert source["time"].endswith("+00:00")
@@ -252,9 +253,11 @@ def test_sources_are_the_messages_sent_to_the_ai_in_the_same_order(fixture_accou
 def test_source_ids_are_unique_and_match_the_messages(fixture_accounts, sent_to_ai):
     answer = _ask("ayse", QUESTION_NO_CHANNEL)
     ids = [s.id for s in answer.sources]
-    assert len(set(ids)) == 39
+    assert len(set(ids)) == 37
     assert all(SOURCE_ID.fullmatch(i) for i in ids)
-    assert set(ids) == {f"{c}:{ts}" for c, ts in _query("SELECT channel_id, ts FROM messages")}
+    stored = {f"{c}:{ts}": text for c, ts, text in _query("SELECT channel_id, ts, clean_text FROM messages")}
+    # S4-02: the 2 messages with hidden instructions are not sources.
+    assert set(ids) == {key for key, text in stored.items() if not injection.detect(text).suspicious}
 
 
 def test_source_id_keeps_ts_as_text(fixture_accounts, sent_to_ai):
@@ -271,7 +274,7 @@ def test_source_id_is_not_sent_to_the_ai(fixture_accounts, sent_to_ai):
 
 def test_source_time_is_utc(fixture_accounts, sent_to_ai):
     answer = _ask("ayse", QUESTION_NO_CHANNEL)
-    assert len(answer.sources) == 39
+    assert len(answer.sources) == 37
     assert all(s.time.endswith("+00:00") for s in answer.sources)
 
 

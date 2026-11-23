@@ -9,7 +9,7 @@ from tests.auth_clients import TEST_PASSWORD
 
 TABLES = {
     "people", "linked_accounts", "slack_users", "channels",
-    "channel_memberships", "messages", "audit_events", "ai_calls", "sessions", "masked_texts",
+    "channel_memberships", "messages", "audit_events", "ai_calls", "sessions", "masked_texts", "suspicious_messages",
 }
 TOKEN_HASH = "ab" * 32
 TIME = "2026-10-22T14:05:00+03:00"
@@ -92,7 +92,7 @@ def test_tables_created_when_empty(db):
     assert names == TABLES
     for table in TABLES:
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 8
 
 
 def test_creating_twice_causes_no_problem(db):
@@ -105,7 +105,7 @@ def test_creating_twice_causes_no_problem(db):
 
 def test_newer_version_database_is_rejected():
     connection = connect(":memory:")
-    connection.execute("PRAGMA user_version = 8")
+    connection.execute("PRAGMA user_version = 9")
     with pytest.raises(RuntimeError):
         create_tables(connection)
     connection.close()

@@ -16,19 +16,34 @@ from .accounts.rules import SignedInPerson
 from .audit.event_limit import UnauthenticatedEventLimiter, unauthenticated_event_limiter
 from .audit.log import AuditWriteError, write_ai_call, write_event
 from .audit.rules import add_counts, gateway_event, screen_masked
-from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id, split_suspicious
+from .data_selection.rules import MESSAGE_LIMIT, decide_access, named_channel_id
 from .data_selection.selection import member_channel_ids, people_names, question_time_channels, select_messages
 from .database.masked_texts import MaskedTextWriteError, write_masked_text
 from .database.schema import connect, create_tables
+from .database.suspicious_messages import SuspiciousMessageWriteError, write_suspicious_messages
+from .filters import injection
 from .filters.api import Vault, mask_secrets
 from .filters.output import clean_answer
 from .schemas import AskResponse, SecuritySummary, SourceMessage
 
 log = logging.getLogger("agentstack")
 
-# The hidden instruction check of the sanitization step: None until Stage 4 connects the detector
-# (Stage 4: lambda text: injection.detect(text).suspicious). With None no message is removed.
-SUSPICIOUS_CHECK: Callable[[str], bool] | None = None
+
+class SecurityCheckUnavailable(Exception):
+    """The hidden instruction detector does not work (S4-02): the question stops with 503, the AI is not called.
+
+    It carries no text: no question, message or value.
+    """
+
+
+def _detector_says_suspicious(text: str) -> bool:
+    """The hidden instruction check of the sanitization step (S4-02). injection.detect never raises and is
+    fail-closed: a message it cannot decide on is suspicious. Read at call time, so a test can replace the detector."""
+    return injection.detect(text).suspicious
+
+
+# The hidden instruction check of the sanitization step; it gets the message text as stored in the database.
+SUSPICIOUS_CHECK: Callable[[str], bool] = _detector_says_suspicious
 
 NO_ACCESS_ANSWER = "There is no channel you can ask about with this name."
 NO_MESSAGES_ANSWER = "No messages were found for this question."
@@ -139,16 +154,25 @@ def data_selection(c: RequestContext) -> None:
         c.sync_secret_counts = selection.secret_counts
 
 
-# --- 4. Sanitization (S3-08): the question and the selected messages are masked before the AI.
+# --- 4. Sanitization (S3-08, S4-02): the question and the selected messages are masked before the AI.
 # Secrets -> [REDACTED] (mask_secrets); personal data and names -> placeholders (Vault, S3-12).
-# Runs only after authorization and data selection passed, so an unauthorized request masks nothing.
+# Hidden instructions (S4-02): the detector must be ready (warm_up) or the question stops with 503; every selected
+# message is checked as stored in the database, and a suspicious one is removed: it is not sent, not in sources, and its
+# counts do not count. The question itself is never checked. The removed messages are written to suspicious_messages
+# (masked), and the one counter `removed` gives the screen, the event and the table the same number.
+# Runs only after authorization and data selection passed, so an unauthorized request masks and checks nothing.
 # Everything is computed first and written to the context at the end: an error leaves no half result.
 def sanitization(c: RequestContext) -> None:
+    if not injection.warm_up():
+        c.reason_code = "SECURITY_CHECK_UNAVAILABLE"
+        raise SecurityCheckUnavailable()
+
     people = people_names(c.connection)
     question_secrets = mask_secrets(c.question)
     question_vault = c.vault.mask(question_secrets.text, people)
 
-    masked: list[tuple[SourceMessage, dict[str, int]]] = []
+    kept: list[tuple[SourceMessage, dict[str, int]]] = []
+    removed: list[SourceMessage] = []
     for message in c.selected_messages:
         text_secrets = mask_secrets(message.text)
         text_vault = c.vault.mask(text_secrets.text, people)
@@ -156,9 +180,19 @@ def sanitization(c: RequestContext) -> None:
         counts = add_counts(
             c.sync_secret_counts.get(message.id, {}), text_secrets.counts, text_vault.counts, author_vault.counts,
         )
-        masked.append((message.model_copy(update={"text": text_vault.text, "author": author_vault.text}), counts))
+        masked_message = message.model_copy(update={"text": text_vault.text, "author": author_vault.text})
+        try:
+            suspicious = SUSPICIOUS_CHECK(message.text)
+        except Exception as error:
+            # A detector that fails is never "not suspicious": nothing can be checked, so nothing is sent.
+            c.reason_code = "SECURITY_CHECK_UNAVAILABLE"
+            raise SecurityCheckUnavailable() from error
+        if suspicious:
+            removed.append(masked_message)
+        else:
+            kept.append((masked_message, counts))
 
-    kept, removed = split_suspicious(masked, lambda item: item[0].text, SUSPICIOUS_CHECK)
+    _write_suspicious_messages(c, removed)
     masked_kinds = add_counts(question_secrets.counts, question_vault.counts, *(counts for _, counts in kept))
 
     c.question_for_ai = question_vault.text
@@ -166,7 +200,32 @@ def sanitization(c: RequestContext) -> None:
     c.masked_kinds = masked_kinds
     c.security.masked = screen_masked(masked_kinds)
     c.security.alarm = question_secrets.alarm  # only a secret in the question itself gives an alarm
-    c.security.suspicious = removed
+    c.security.suspicious = len(removed)
+    if not c.selected_messages:
+        # Every selected message was removed: nothing is left for the AI (API contract 8: "No messages were found").
+        c.reason_code = "NO_MESSAGES"
+        c.stopped = True
+
+
+def _write_suspicious_messages(c: RequestContext, removed: list[SourceMessage]) -> None:
+    """Writes the removed messages (masked) in their own transaction before the AI step (S4-02).
+
+    If they cannot be written the request stops (500, the AI is not called). The log gets only the request id and the
+    error type; the error raised carries no text.
+    """
+    if not removed:
+        return
+    try:
+        with c.connection:
+            write_suspicious_messages(
+                c.connection,
+                created_at=c.now().isoformat(),
+                request_id=c.request_id,
+                items=[(message.channel, message.text) for message in removed],
+            )
+    except Exception as error:
+        log.error("Failed to write suspicious messages (request %s): %s", c.request_id, type(error).__name__)
+        raise SuspiciousMessageWriteError() from error
 
 
 # --- 5. Ask the AI (S1-08, Boran): instruction and data go in separate fields.

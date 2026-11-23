@@ -2,8 +2,8 @@
 
 Run (inside server/): .venv/Scripts/python -m app.database.check_db [--db PATH]
 
-- Scans messages.clean_text (the only column that keeps message text) and masked_texts.masked_text (the masked text
-  sent to the AI, S3-14) with the same secret rules as sync and seed load (find_secrets on the normalized text).
+- Scans messages.clean_text (the only column that keeps message text), masked_texts.masked_text (the masked text
+  sent to the AI, S3-14) and suspicious_messages.masked_text (the removed messages, S4-02) with the same secret rules as sync and seed load (find_secrets on the normalized text).
   Every finding counts, certain or suspicious.
 - Opens the database read only: it never creates, changes or fixes anything.
 - Prints only the row id and the kind of each finding, never a value or any text.
@@ -29,11 +29,12 @@ def _plural(count: int, word: str) -> str:
 
 
 Rows = list[tuple[int, str]]
+Texts = tuple[Rows, Rows, Rows]
 
 
-def _read_texts(path: Path, write: Callable[[str], None]) -> tuple[Rows, Rows] | None:
-    """The (id, clean_text) rows of messages and the (id, masked_text) rows of masked_texts, or None after writing why
-    they could not be read."""
+def _read_texts(path: Path, write: Callable[[str], None]) -> Texts | None:
+    """The (id, clean_text) rows of messages and the (id, masked_text) rows of masked_texts and suspicious_messages, or
+    None after writing why they could not be read."""
     if not path.is_file():
         write(f"ERROR: database file not found: {path}. "
               "Load the seed first: python -m app.slack_connector.seed load")
@@ -50,9 +51,10 @@ def _read_texts(path: Path, write: Callable[[str], None]) -> tuple[Rows, Rows] |
             return None
         messages = connection.execute("SELECT id, clean_text FROM messages ORDER BY id").fetchall()
         masked_texts = connection.execute("SELECT id, masked_text FROM masked_texts ORDER BY id").fetchall()
-        return messages, masked_texts
+        suspicious = connection.execute("SELECT id, masked_text FROM suspicious_messages ORDER BY id").fetchall()
+        return messages, masked_texts, suspicious
     except sqlite3.Error as error:
-        write(f"ERROR: the messages or masked texts cannot be read ({type(error).__name__}). {RELOAD_HINT}")
+        write(f"ERROR: the messages, masked texts or suspicious messages cannot be read ({type(error).__name__}). {RELOAD_HINT}")
         return None
     finally:
         connection.close()
@@ -62,7 +64,7 @@ def run_command(argv: list[str], *, database_path: str | Path, write: Callable[[
     """Command line. Exit: 0 clean, 1 raw secrets found, 2 the check could not run."""
     parser = argparse.ArgumentParser(
         prog="python -m app.database.check_db",
-        description="Checks that no message and no masked text in the database contains a raw secret.",
+        description="Checks that no message, masked text or suspicious message in the database contains a raw secret.",
     )
     parser.add_argument("--db", type=Path, default=None, help="Database file (default: DATABASE_PATH in .env).")
     try:
@@ -73,21 +75,27 @@ def run_command(argv: list[str], *, database_path: str | Path, write: Callable[[
     texts = _read_texts(Path(args.db) if args.db else Path(database_path), write)
     if texts is None:
         return 2
-    messages, masked_texts = texts
+    messages, masked_texts, suspicious = texts
     try:
         message_findings = _findings(messages)
         masked_findings = _findings(masked_texts)
+        suspicious_findings = _findings(suspicious)
     except Exception as error:
         # Closed on error: a rule that fails must never look like a clean database.
         write(f"The secret check failed ({type(error).__name__}).")
         return 2
 
-    write(f"Checked {_plural(len(messages), 'message')} and {_plural(len(masked_texts), 'masked text')}.")
+    write(
+        f"Checked {_plural(len(messages), 'message')}, {_plural(len(masked_texts), 'masked text')} "
+        f"and {_plural(len(suspicious), 'suspicious message')}."
+    )
     for row_id, kind in message_findings:
         write(f"message {row_id}: {kind}")
     for row_id, kind in masked_findings:
         write(f"masked text {row_id}: {kind}")
-    total = len(message_findings) + len(masked_findings)
+    for row_id, kind in suspicious_findings:
+        write(f"suspicious message {row_id}: {kind}")
+    total = len(message_findings) + len(masked_findings) + len(suspicious_findings)
     if total == 0:
         write("0 raw secrets.")
         return 0
@@ -96,7 +104,10 @@ def run_command(argv: list[str], *, database_path: str | Path, write: Callable[[
         places.append(_plural(len({row_id for row_id, _ in message_findings}), "message"))
     if masked_findings:
         places.append(_plural(len({row_id for row_id, _ in masked_findings}), "masked text"))
-    write(f"{_plural(total, 'raw secret')} in {' and '.join(places)}.")
+    if suspicious_findings:
+        places.append(_plural(len({row_id for row_id, _ in suspicious_findings}), "suspicious message"))
+    where = places[0] if len(places) == 1 else ", ".join(places[:-1]) + " and " + places[-1]
+    write(f"{_plural(total, 'raw secret')} in {where}.")
     return 1
 
 

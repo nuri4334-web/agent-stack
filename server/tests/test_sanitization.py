@@ -24,8 +24,9 @@ SERVER_ERROR = {"error": {"code": "SERVER_ERROR", "message": "An unexpected serv
 DEV_KINDS = {"aws_key": 2, "db_password": 1, "env_secret": 1, "github_token": 1, "google_key": 1, "slack_token": 1}
 DEV_MASKED = sum(DEV_KINDS.values())
 DEV_MESSAGES = 27
-# S3-12: people names in #dev (27 message authors + 12 in the texts); counted in the event, never on the screen.
-DEV_PERSONS = 39
+DEV_SENT = 25  # S4-02: the 2 messages with hidden instructions (D23, D24) are removed before the AI
+# S3-12: people names in #dev (25 authors of the messages sent + 12 in the texts); counted in the event, never on the screen.
+DEV_PERSONS = 37
 KEY_QUESTION_START = "#dev'i özetle, bu anahtar çalışmıyor: "
 KEY_QUESTION = KEY_QUESTION_START + s.SLACK_TOKEN
 
@@ -253,7 +254,7 @@ def test_response_has_no_secret_counts(client_as, sent_to_ai):
     assert r.status_code == 200
     assert "secret_counts" not in r.text
     sources = r.json()["sources"]
-    assert len(sources) == DEV_MESSAGES
+    assert len(sources) == DEV_SENT
     for source in sources:
         assert set(source) == {"id", "channel", "author", "time", "text"}
 
@@ -295,10 +296,11 @@ def test_vault_counts_reach_events_but_names_not_the_screen(client_as, sent_to_a
         connection.close()
     assert people
     assert set(vault.calls) == {people}
-    assert body["security"]["masked"] == DEV_MASKED + calls  # e-mails count, names do not (N3)
+    sent_calls = 1 + 2 * DEV_SENT  # the question, then the text and the author of every message that is sent
+    assert body["security"]["masked"] == DEV_MASKED + sent_calls  # e-mails count, names do not (N3)
     row = _row(body["request_id"], "sanitization")
-    assert row["masked_kinds"] == DEV_KINDS | {"email": calls, "person": 2 * calls}
-    assert row["masked_count"] == DEV_MASKED + 3 * calls
+    assert row["masked_kinds"] == DEV_KINDS | {"email": sent_calls, "person": 2 * sent_calls}
+    assert row["masked_count"] == DEV_MASKED + 3 * sent_calls
 
 
 def test_vault_text_is_what_the_ai_sees(client_as, sent_to_ai, monkeypatch):
@@ -381,13 +383,13 @@ def test_bad_secret_counts_row_stops_the_question(fixture_accounts, sent_to_ai, 
 # --- Suspicious messages (the detector is connected in Stage 4)
 
 
-def test_suspicious_is_zero_today(client_as, sent_to_ai):
-    assert gateway.SUSPICIOUS_CHECK is None
+def test_suspicious_is_two_with_the_detector(client_as, sent_to_ai):
+    assert gateway.SUSPICIOUS_CHECK is not None  # S4-02: the detector is connected
     r = s.ask(client_as("ali"), "#dev'i özetle")
     body = r.json()
-    assert body["security"]["suspicious"] == 0
-    assert len(body["sources"]) == DEV_MESSAGES
-    assert _row(body["request_id"], "sanitization")["suspicious_count"] == 0
+    assert body["security"]["suspicious"] == 2
+    assert len(body["sources"]) == DEV_SENT
+    assert _row(body["request_id"], "sanitization")["suspicious_count"] == 2
 
 
 def test_removed_message_is_not_sent_and_not_counted(client_as, sent_to_ai, monkeypatch):
@@ -403,7 +405,7 @@ def test_removed_message_is_not_sent_and_not_counted(client_as, sent_to_ai, monk
     row = _row(body["request_id"], "sanitization")
     # The names of the 26 messages sent count; the removed message's author does not.
     assert (row["suspicious_count"], row["masked_kinds"], row["masked_count"]) == (
-        1, {"person": DEV_PERSONS - 1}, DEV_PERSONS - 1,
+        1, {"person": DEV_PERSONS + 1}, DEV_PERSONS + 1,  # the replaced check keeps D23 and D24: 37 + 2 - 1
     )
     assert _row(body["request_id"], "ask_ai")["message_count"] == DEV_MESSAGES - 1
 

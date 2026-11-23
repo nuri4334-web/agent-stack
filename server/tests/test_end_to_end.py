@@ -95,12 +95,12 @@ def test_summarize_dev_ai_called_once_and_only_dev(sent):
     body = r.json()
     assert body["status"] == "ok"
     assert body["answer"] == ai.FAKE_FIXED_ANSWER
-    assert [s["channel"] for s in body["sources"]] == ["dev"] * 27
+    assert [s["channel"] for s in body["sources"]] == ["dev"] * 25
     assert ai.fake_call_count() == 1
     assert len(sent) == 1
     channels = LINE_START.findall(sent[0])
     assert set(channels) == {"dev"}
-    assert len(channels) == 27
+    assert len(channels) == 25
     for text in _channel_texts("yonetim") + _channel_texts("genel"):
         assert text not in sent[0]
 
@@ -112,7 +112,7 @@ def test_no_channel_name_only_allowed_channels(sent, ayse_asks):
     assert r.json()["status"] == "ok"
     channels = LINE_START.findall(sent[0])
     assert set(channels) == {"dev", "genel", "yonetim"}
-    assert len(channels) == 39
+    assert len(channels) == 37
     assert "TEST - excluded message" not in sent[0]
 
 
@@ -217,7 +217,7 @@ def test_call_record_correct_and_has_no_text(sent):
     created_at, request_id, model, result, count, duration_ms, input_tokens, output_tokens = rows[0]
     assert created_at == FIXED_NOW.isoformat()
     assert request_id == answer.request_id
-    assert (model, result, count) == ("fake-v1", "ok", 27)
+    assert (model, result, count) == ("fake-v1", "ok", 25)
     assert duration_ms >= 0
     assert input_tokens > 0 and output_tokens > 0
     text_columns = " ".join(str(d) for d in rows[0])
@@ -244,7 +244,7 @@ def test_provider_error_record_and_502_504(monkeypatch, code, http, result):
     rows = _call_rows()
     assert len(rows) == 1
     _, _, model, written_result, count, _, input_tokens, output_tokens = rows[0]
-    assert (model, written_result, count, input_tokens, output_tokens) == ("unknown", result, 27, None, None)
+    assert (model, written_result, count, input_tokens, output_tokens) == ("unknown", result, 25, None, None)
 
 
 def test_model_name_from_setting_on_gemini_error(monkeypatch):

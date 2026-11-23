@@ -13,7 +13,7 @@ from pathlib import Path
 from .. import settings
 
 # Schema version in the code (PRAGMA user_version).
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Lowest SQLite version: STRICT tables (3.37) and the built-in JSON functions of the secret_counts check (3.38).
 MIN_SQLITE_VERSION = (3, 38, 0)
@@ -170,6 +170,18 @@ CREATE TABLE IF NOT EXISTS masked_texts (
     masked_text  TEXT NOT NULL CHECK (length(masked_text) > 0)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS masked_texts_created_at ON masked_texts (created_at);
+
+CREATE TABLE IF NOT EXISTS suspicious_messages (
+    id            INTEGER PRIMARY KEY,
+    request_id    TEXT NOT NULL CHECK (
+                      length(request_id) BETWEEN 1 AND 64
+                      AND request_id NOT GLOB '*[^0-9a-f]*'
+                  ),
+    created_at    TEXT NOT NULL,
+    channel_name  TEXT NOT NULL CHECK (length(channel_name) > 0),
+    masked_text   TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS suspicious_messages_created_at ON suspicious_messages (created_at);
 """
 
 
