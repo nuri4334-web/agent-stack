@@ -112,6 +112,24 @@ def decide_access(
     return AccessDecision(channel_ids=tuple(targets))
 
 
+def listable_channel_names(
+    channels: Sequence[tuple[str, str, str]], member_channel_ids: Collection[str],
+) -> list[str]:
+    """Channel names the person may ask about (for a linked Slack account), sorted. `channels`: question-time rows.
+
+    A name is listed only if asking "#<name>" would pass `decide_access`: the same function, no second rule.
+    The name must also be read back from "#<name>" as exactly itself ("#foo bar" would be read as "foo", and an
+    all-digit name is no channel name in a question), otherwise the question would mean something else.
+    """
+    listed = []
+    for name in sorted({normalize_channel_name(name) for _, name, _ in channels}):
+        if channels_in_question(f"#{name}") != [name]:
+            continue
+        if not decide_access(f"#{name}", channels, member_channel_ids, slack_linked=True).reason_code:
+            listed.append(name)
+    return listed
+
+
 def source_id(channel_id: str, ts: str) -> str:
     """The stable id of a message in the answer (API contract 8). ts stays the text Slack gave."""
     return f"{channel_id}:{ts}"

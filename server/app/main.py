@@ -21,6 +21,7 @@ from .ai import AIError
 from .audit.log import list_events
 from .audit.rules import parse_event_limit
 from . import settings, gateway
+from .data_selection.selection import person_channel_names
 from .database.schema import connect, create_tables
 from .schemas import AuditEventList, ErrorResponse, AskResponse, AskRequest, LoginRequest, PersonResponse
 
@@ -275,3 +276,11 @@ def admin_events(
 ) -> AuditEventList:
     with _database() as connection:
         return AuditEventList(events=list_events(connection, limit))
+
+
+@app.get("/api/channels", responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+def channels(person: SignedInPerson = Depends(current_person)) -> dict:
+    # current_person, not ask_person: this endpoint writes no audit event, not even on 401 (API contract 9a).
+    with _database() as connection:
+        names = person_channel_names(connection, person.slack_user_id)
+    return {"channels": [{"name": name} for name in names]}

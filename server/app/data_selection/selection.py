@@ -11,7 +11,8 @@ from ..filters.types import SECRET_KINDS
 from ..schemas import SourceMessage
 from ..database.rules import ALLOWED, channel_list_warnings, channel_status
 from .rules import (
-    MESSAGE_LIMIT, TargetResult, author_name, find_target_channels, resolve_slack_mentions, source_id,
+    MESSAGE_LIMIT, TargetResult, author_name, find_target_channels, listable_channel_names, resolve_slack_mentions,
+    source_id,
 )
 
 log = logging.getLogger("agentstack")
@@ -75,6 +76,15 @@ def member_channel_ids(connection: sqlite3.Connection, slack_user_id: str) -> fr
     return frozenset(channel_id for (channel_id,) in connection.execute(
         "SELECT channel_id FROM channel_memberships WHERE slack_user_id = ?", (slack_user_id,)
     ))
+
+
+def person_channel_names(connection: sqlite3.Connection, slack_user_id: str | None) -> list[str]:
+    """The channel names the person may ask about, sorted. No Slack account: an empty list (nothing is decided)."""
+    if slack_user_id is None:
+        return []
+    return listable_channel_names(
+        question_time_channels(connection), member_channel_ids(connection, slack_user_id)
+    )
 
 
 def select_messages(
