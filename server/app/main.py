@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 
 from .accounts.login import attempt_login, end_session
@@ -22,6 +22,7 @@ from .audit.log import list_events
 from .audit.rules import parse_event_limit
 from . import settings, gateway
 from .data_selection.selection import person_channel_names
+from .database.masked_texts import read_masked_texts
 from .database.schema import connect, create_tables
 from .schemas import AuditEventList, ErrorResponse, AskResponse, AskRequest, LoginRequest, PersonResponse
 
@@ -262,6 +263,18 @@ def ask(
     return gateway.handle_question(question=body.question, person=person)
 
 
+class MaskedTextItem(BaseModel):
+    request_id: str
+    created_at: str
+    kind: str
+    channel: str | None
+    text: str
+
+
+class MaskedTextList(BaseModel):
+    items: list[MaskedTextItem]
+
+
 @app.get(
     "/api/admin/events",
     response_model=AuditEventList,
@@ -276,6 +289,22 @@ def admin_events(
 ) -> AuditEventList:
     with _database() as connection:
         return AuditEventList(events=list_events(connection, limit))
+
+
+@app.get(
+    "/api/admin/masked-texts",
+    response_model=MaskedTextList,
+    responses={
+        401: {"model": ErrorResponse}, 403: {"model": ErrorResponse},
+        422: {"model": ErrorResponse}, 500: {"model": ErrorResponse},
+    },
+)
+def admin_masked_texts(
+    admin: SignedInPerson = Depends(current_admin),  # first: session and role before the limit
+    limit: int = Depends(read_event_limit),
+) -> MaskedTextList:
+    with _database() as connection:
+        return MaskedTextList(items=read_masked_texts(connection, limit=limit))
 
 
 @app.get("/api/channels", responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})

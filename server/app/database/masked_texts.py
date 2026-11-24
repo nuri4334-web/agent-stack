@@ -20,3 +20,32 @@ def write_masked_text(connection: sqlite3.Connection, *, created_at: str, reques
         "INSERT INTO masked_texts (created_at, request_id, masked_text) VALUES (?, ?, ?)",
         (created_at, request_id, masked_text),
     )
+
+
+def read_masked_texts(connection: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, str | None]]:
+    """Reads masked texts and suspicious messages together, newest first.
+
+    Returns dicts with keys: request_id, created_at, kind, channel, text.
+    """
+    cursor = connection.execute(
+        """
+        SELECT request_id, created_at, 'sent' AS kind, NULL AS channel, masked_text AS text, id
+        FROM masked_texts
+        UNION ALL
+        SELECT request_id, created_at, 'removed_suspicious' AS kind, channel_name AS channel, masked_text AS text, id
+        FROM suspicious_messages
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [
+        {
+            "request_id": row[0],
+            "created_at": row[1],
+            "kind": row[2],
+            "channel": row[3],
+            "text": row[4],
+        }
+        for row in cursor.fetchall()
+    ]
