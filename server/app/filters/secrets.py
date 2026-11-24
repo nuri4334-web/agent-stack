@@ -54,7 +54,13 @@ _VALUE_RULES = [
 # An .env line: NAME=value. The name (upper case, as in .env) is checked for a secret word in code, not in the pattern.
 _ENV_LINE = re.compile(
     r"(?<![A-Za-z0-9_])(?P<name>[A-Z0-9_]{1,128})[ \t]{0,8}[=:][ \t]{0,8}"
-    r"(?:\"(?P<dq>[^\"\n]{1,1024})\"|'(?P<sq>[^'\n]{1,1024})'|(?P<bare>[^\s\"']{1,1024}))"
+    r"(?:"
+        r"\"(?P<dq>[^\"\r\n]{1,1024})\""
+        r"|'(?P<sq>[^'\r\n]{1,1024})'"
+        r"|(?P<bare>[^\s\"']{1,1024})"
+        r"|(?:\r?\n)[ \t]{0,8}\"(?P<dq_nl>[^\"\r\n]{1,1024})\""
+        r"|(?:\r?\n)[ \t]{0,8}'(?P<sq_nl>[^'\r\n]{1,1024})'"
+    r")"
 )
 _SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PWD")
 # Names of settings, not secrets: PASSWORD_MIN_LENGTH=8, TOKEN_URL=https://..., SSH_KEY_PATH=...
@@ -70,7 +76,7 @@ _PLAIN_URL = re.compile(r"(?i)[a-z][a-z0-9+.\-]*://[^\s:@/]+(?:[/?#][^\s]*)?")
 def _env_secrets(text: str) -> list[Span]:
     spans = []
     for match in _ENV_LINE.finditer(text):
-        group = next(g for g in ("dq", "sq", "bare") if match.group(g) is not None)
+        group = next(g for g in ("dq", "sq", "bare", "dq_nl", "sq_nl") if match.group(g) is not None)
         value = match.group(group)
         name = match.group("name")
         if (not any(word in name for word in _SECRET_WORDS) or name.endswith(_SETTING_NAME_ENDINGS)

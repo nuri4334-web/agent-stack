@@ -267,3 +267,76 @@ def test_equal_length_specific_then_certain_win_among_secrets():
 def test_non_overlapping_spans_all_stay_in_order():
     spans = [Span(10, 12, "email", "certain"), Span(0, 3, "slack_token", "certain"), Span(3, 5, "person", "certain")]
     assert choose_spans(spans) == sorted(spans, key=lambda s: s.start)
+
+
+# --- S4-07 Acceptance Criteria (K1–K6) -----------------------------------------------------------------------
+def test_k1_webhook_secret_newline_quoted_value_masked():
+    val = "EXAMPLE_webhook_secret_456"
+    for newline in ("\n", "\r\n", "\n  "):
+        text = f"WEBHOOK_SECRET={newline}\"{val}\""
+        r = mask_secrets(text)
+        assert not leaks(r.text, val)
+        assert f"WEBHOOK_SECRET={newline}\"{REDACTED}\"" == r.text
+        assert dict(r.counts) == {"env_secret": 1}
+        assert r.alarm is True
+
+    single_quote = f"WEBHOOK_SECRET=\n'{val}'"
+    r_sq = mask_secrets(single_quote)
+    assert not leaks(r_sq.text, val)
+    assert f"WEBHOOK_SECRET=\n'{REDACTED}'" == r_sq.text
+    assert dict(r_sq.counts) == {"env_secret": 1}
+    assert r_sq.alarm is True
+
+
+def test_k2_webhook_secret_same_line_quoted_value():
+    val = "EXAMPLE_webhook_secret_789"
+    text = f'WEBHOOK_SECRET="{val}"'
+    r = mask_secrets(text)
+    assert not leaks(r.text, val)
+    assert r.text == f'WEBHOOK_SECRET="{REDACTED}"'
+    assert dict(r.counts) == {"env_secret": 1}
+    assert r.alarm is True
+
+
+def test_k3_empty_gemini_api_key_no_alarm():
+    for text in ("GEMINI_API_KEY=\n", "GEMINI_API_KEY="):
+        r = mask_secrets(text)
+        assert r.text == text
+        assert dict(r.counts) == {}
+        assert r.alarm is False
+
+
+def test_k4_gemini_api_key_whitespace_and_empty_quotes():
+    for text in ("GEMINI_API_KEY=   ", 'GEMINI_API_KEY=""', "GEMINI_API_KEY=''"):
+        r = mask_secrets(text)
+        assert r.text == text
+        assert dict(r.counts) == {}
+        assert r.alarm is False
+
+
+def test_k5_key_newline_other_key_evaluated_separately():
+    val = "EXAMPLE_another_secret_321"
+    text = f'KEY=\nOTHER_SECRET="{val}"'
+    r = mask_secrets(text)
+    assert not leaks(r.text, val)
+    assert r.text == f'KEY=\nOTHER_SECRET="{REDACTED}"'
+    assert dict(r.counts) == {"env_secret": 1}
+    assert r.alarm is True
+
+    # Bare value on the next line
+    bare_val = "EXAMPLEsecret999"
+    text_bare = f"KEY=\nOTHER_SECRET={bare_val}"
+    r_bare = mask_secrets(text_bare)
+    assert not leaks(r_bare.text, bare_val)
+    assert r_bare.text == f"KEY=\nOTHER_SECRET={REDACTED}"
+    assert dict(r_bare.counts) == {"env_secret": 1}
+    assert r_bare.alarm is True
+
+
+def test_k6_innocent_look_alikes_remain_clean():
+    for text in INNOCENT:
+        r = mask_secrets(text)
+        assert r.text == text
+        assert dict(r.counts) == {}
+        assert r.alarm is False
+
