@@ -5,6 +5,7 @@ import {
   formatMaskedKinds,
   getDisplayedQuestion,
   getEventKey,
+  getSuspiciousWarning,
   groupEventsByRequestId,
   normalizeSecuritySummary,
 } from './security';
@@ -268,6 +269,7 @@ export function ChatAnswerView({ answerData }) {
   const isNoAccess = answerData.status === 'no_access';
   const sources = Array.isArray(answerData.sources) ? answerData.sources : [];
   const security = normalizeSecuritySummary(answerData.security);
+  const suspiciousWarning = getSuspiciousWarning(security);
 
   return (
     <div style={{ marginTop: '20px' }}>
@@ -287,6 +289,25 @@ export function ChatAnswerView({ answerData }) {
           }}
         >
           {SECRET_ALARM_WARNING}
+        </div>
+      )}
+
+      {suspiciousWarning && (
+        <div
+          className="meta-box suspicious-warning-box"
+          role="alert"
+          style={{
+            marginTop: 0,
+            marginBottom: '12px',
+            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid #F59E0B',
+            color: '#FDE68A',
+            padding: '12px 16px',
+            borderRadius: '8px',
+            lineHeight: '1.5',
+          }}
+        >
+          {suspiciousWarning}
         </div>
       )}
 

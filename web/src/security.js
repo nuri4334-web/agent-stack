@@ -18,6 +18,32 @@ export function normalizeSecuritySummary(security) {
 }
 
 /**
+ * Returns the warning text when suspicious messages were removed before reaching the AI.
+ * Accepts either a `security` summary object (`{ suspicious }`) or a raw count.
+ */
+export function getSuspiciousWarning(securityOrCount) {
+  const raw =
+    typeof securityOrCount === 'object' && securityOrCount !== null
+      ? securityOrCount.suspicious
+      : securityOrCount;
+  if (typeof raw === 'boolean') {
+    return '';
+  }
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num <= 0) {
+    return '';
+  }
+  const count = Math.floor(num);
+  if (count <= 0) {
+    return '';
+  }
+  if (count === 1) {
+    return '1 message was removed for security reasons.';
+  }
+  return `${count} messages were removed for security reasons.`;
+}
+
+/**
  * Returns the question text safe to display in the chat bubble.
  * When `security.alarm` is true, the raw question contained a secret and is never shown.
  */
