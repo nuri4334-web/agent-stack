@@ -41,6 +41,36 @@ cd server
 pytest
 ```
 
+## Pre-commit check
+
+Before committing, a local hook verifies that no real secrets or `.env` files are accidentally committed and that relevant tests pass.
+
+### Setup (one command)
+
+From the repository root:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+On Windows (PowerShell or Command Prompt):
+```powershell
+git config core.hooksPath .githooks
+```
+
+On macOS / Linux:
+```bash
+git config core.hooksPath .githooks
+```
+
+### Emergency bypass
+
+In an emergency (e.g. offline work), you can bypass the check with:
+```powershell
+git commit --no-verify
+```
+If you use `--no-verify`, state the reason in your PR description.
+
 ## Injection detector (optional)
 
 `app/filters/injection.py` checks a text for hidden instructions (prompt injection) with a small rule list and a local

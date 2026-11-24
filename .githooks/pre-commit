@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit hook runner for Windows, macOS, and Linux
+# Executes the Python pre-commit script
+
+if [ -f "server/.venv/bin/python" ]; then
+    exec "server/.venv/bin/python" .githooks/pre_commit.py "$@"
+elif [ -f "server/.venv/Scripts/python.exe" ]; then
+    exec "server/.venv/Scripts/python.exe" .githooks/pre_commit.py "$@"
+elif command -v python3 >/dev/null 2>&1; then
+    exec python3 .githooks/pre_commit.py "$@"
+else
+    exec python .githooks/pre_commit.py "$@"
+fi
