@@ -1,13 +1,28 @@
-import { Fragment, useCallback, useEffect, useState } from 'react';
-import { API_URL, askQuestion, getAdminEvents, getCurrentUser, login, logout } from './api';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  API_URL,
+  askQuestion,
+  getAdminEvents,
+  getChannels,
+  getCurrentUser,
+  login,
+  logout,
+} from './api';
+import {
+  CHANNEL_PICKER_HINT,
   SECRET_ALARM_WARNING,
+  applyChannelSelection,
+  canSubmitQuestion,
+  filterChannels,
   formatMaskedKinds,
+  getActiveChannelQuery,
   getDisplayedQuestion,
   getEventKey,
   getSuspiciousWarning,
   groupEventsByRequestId,
+  normalizeChannelList,
   normalizeSecuritySummary,
+  tokenizeQuestionChannels,
 } from './security';
 
 function formatLocalTime(isoString) {
@@ -390,6 +405,16 @@ export default function App() {
   const [answerData, setAnswerData] = useState(null);
   const [errorInfo, setErrorInfo] = useState(null);
 
+  // Channel picker state (S4-11)
+  const [channels, setChannels] = useState([]);
+  const [channelsLoaded, setChannelsLoaded] = useState(false);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [pickerDismissed, setPickerDismissed] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const submittingRef = useRef(false);
+  const questionInputRef = useRef(null);
+  const cursorPosRef = useRef(0);
+
   // Security Panel state (S2-09)
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -428,6 +453,32 @@ export default function App() {
     };
   }, []);
 
+  // Fetch accessible channels once when the user is signed in (K1)
+  useEffect(() => {
+    if (!currentUser) {
+      return undefined;
+    }
+    let cancelled = false;
+    async function loadChannels() {
+      try {
+        const list = await getChannels();
+        if (!cancelled) {
+          setChannels(normalizeChannelList(list));
+          setChannelsLoaded(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setChannels([]);
+          setChannelsLoaded(false);
+        }
+      }
+    }
+    loadChannels();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
   // Countdown timer when login is locked (HTTP 429)
   useEffect(() => {
     if (lockoutSecondsLeft <= 0) return undefined;
@@ -452,6 +503,8 @@ export default function App() {
     } catch (err) {
       if (err?.status === 401) {
         setCurrentUser(null);
+        setChannels([]);
+        setChannelsLoaded(false);
         setEvents([]);
         setLoginError('Please sign in.');
         setActivePage('login');
@@ -514,8 +567,14 @@ export default function App() {
   const handleLogout = async () => {
     setProfileOpen(false);
     await logout();
+    cursorPosRef.current = 0;
     setCurrentUser(null);
+    setChannels([]);
+    setChannelsLoaded(false);
     setQuestion('');
+    setCursorPos(0);
+    setPickerDismissed(false);
+    setHighlightedIndex(0);
     setSentQuestion('');
     setAnswerData(null);
     setErrorInfo(null);
@@ -525,13 +584,99 @@ export default function App() {
     setActivePage('login');
   };
 
+  const effectiveChannels = currentUser ? channels : [];
+  const activeChannelQuery = getActiveChannelQuery(question, cursorPos);
+  const filteredChannels =
+    activeChannelQuery && channelsLoaded
+      ? filterChannels(effectiveChannels, activeChannelQuery.query)
+      : [];
+  const isPickerOpen = Boolean(
+    currentUser &&
+      channelsLoaded &&
+      activeChannelQuery &&
+      !pickerDismissed &&
+      filteredChannels.length > 0,
+  );
+  const safeHighlightedIndex =
+    filteredChannels.length > 0
+      ? Math.min(highlightedIndex, filteredChannels.length - 1)
+      : 0;
+  const questionSegments = tokenizeQuestionChannels(question, effectiveChannels);
+
+  const handleQuestionChange = (e) => {
+    const nextValue = e.target.value;
+    const rawSelection = e.target.selectionStart;
+    const nextCursor =
+      typeof rawSelection === 'number' && rawSelection > 0
+        ? rawSelection
+        : nextValue.length;
+    cursorPosRef.current = nextCursor;
+    setQuestion(nextValue);
+    setCursorPos(nextCursor);
+    setPickerDismissed(false);
+    setHighlightedIndex(0);
+  };
+
+  const handleSelectChannel = (channelName) => {
+    const currentCursor = cursorPosRef.current || question.length;
+    const active = getActiveChannelQuery(question, currentCursor);
+    if (!active) return;
+    const cleaned = channelName.trim().replace(/^#+/, '').toLowerCase();
+    const nextValue = applyChannelSelection(question, cleaned, currentCursor);
+    const nextCursor = active.start + cleaned.length + 2;
+    cursorPosRef.current = nextCursor;
+    setQuestion(nextValue);
+    setCursorPos(nextCursor);
+    setPickerDismissed(false);
+    setHighlightedIndex(0);
+    questionInputRef.current?.focus();
+  };
+
+  const handleQuestionKeyDown = (e) => {
+    if (!isPickerOpen) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex((prev) => (prev + 1) % filteredChannels.length);
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex(
+        (prev) => (prev - 1 + filteredChannels.length) % filteredChannels.length,
+      );
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      const selected = filteredChannels[safeHighlightedIndex];
+      if (selected) {
+        e.preventDefault();
+        handleSelectChannel(selected);
+      }
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setPickerDismissed(true);
+    }
+  };
+
   const sendQuestion = async (e) => {
     e.preventDefault();
-    const trimmed = question.trim();
-    if (!trimmed || typing) return;
+    if (!canSubmitQuestion(question, typing || submittingRef.current)) return;
 
+    submittingRef.current = true;
+    const trimmed = question.trim();
+
+    cursorPosRef.current = 0;
     setSentQuestion(trimmed);
     setQuestion('');
+    setCursorPos(0);
+    setPickerDismissed(false);
+    setHighlightedIndex(0);
     setTyping(true);
     setAnswerData(null);
     setErrorInfo(null);
@@ -545,6 +690,8 @@ export default function App() {
     } catch (err) {
       if (err?.status === 401) {
         setCurrentUser(null);
+        setChannels([]);
+        setChannelsLoaded(false);
         setLoginError('Please sign in.');
         setActivePage('login');
         return;
@@ -555,6 +702,7 @@ export default function App() {
         message: err?.message || 'Could not reach the server.',
       });
     } finally {
+      submittingRef.current = false;
       setTyping(false);
     }
   };
@@ -849,17 +997,80 @@ export default function App() {
               {answerData && !typing && <ChatAnswerView answerData={answerData} />}
 
               <form className="input-row" onSubmit={sendQuestion}>
-                <input
-                  type="text"
-                  className="text-input"
-                  placeholder="Type your question... (e.g. summarize #dev)"
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                />
+                <div className="question-input-wrapper">
+                  <div
+                    className="question-highlight-layer"
+                    data-testid="question-highlight"
+                    aria-hidden="true"
+                  >
+                    {questionSegments.map((seg, idx) =>
+                      seg.color ? (
+                        <span
+                          key={`${idx}-${seg.text}`}
+                          className={`channel-token channel-token-${seg.color}`}
+                          data-testid={`channel-token-${seg.color}`}
+                          data-channel={seg.channel}
+                          data-color={seg.color}
+                          style={{
+                            color: seg.color === 'blue' ? '#38BDF8' : '#F87171',
+                          }}
+                        >
+                          {seg.text}
+                        </span>
+                      ) : (
+                        <span key={`${idx}-${seg.text}`}>{seg.text}</span>
+                      ),
+                    )}
+                  </div>
+
+                  <input
+                    ref={questionInputRef}
+                    type="text"
+                    className={`text-input ${
+                      questionSegments.some((s) => s.color) ? 'has-channel-tokens' : ''
+                    }`}
+                    placeholder="Type your question... (e.g. summarize #dev)"
+                    value={question}
+                    onChange={handleQuestionChange}
+                    onKeyDown={handleQuestionKeyDown}
+                    autoComplete="off"
+                  />
+
+                  {isPickerOpen && (
+                    <ul
+                      className="channel-picker-dropdown"
+                      role="listbox"
+                      aria-label="Channels"
+                      data-testid="channel-picker"
+                    >
+                      {filteredChannels.map((ch, idx) => (
+                        <li
+                          key={ch}
+                          role="option"
+                          aria-selected={idx === safeHighlightedIndex}
+                          className={`channel-picker-item ${
+                            idx === safeHighlightedIndex ? 'active' : ''
+                          }`}
+                          data-testid={`channel-option-${ch}`}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            handleSelectChannel(ch);
+                          }}
+                          onClick={() => handleSelectChannel(ch)}
+                        >
+                          {ch}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <button type="submit" className="btn-primary" disabled={typing}>
                   Send
                 </button>
               </form>
+              <p className="channel-picker-hint" data-testid="channel-picker-hint">
+                {CHANNEL_PICKER_HINT}
+              </p>
             </div>
           </div>
         )}

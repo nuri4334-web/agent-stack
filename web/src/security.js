@@ -169,3 +169,185 @@ export function groupEventsByRequestId(events) {
 
   return groups;
 }
+
+export const CHANNEL_PICKER_HINT =
+  'To ask about a channel, start with # and pick it from the list.';
+
+/**
+ * Normalizes a list of channel objects (`[{ name }]`) or strings (`["dev"]`)
+ * into a deduplicated array of lowercase, non-empty channel names.
+ */
+export function normalizeChannelList(channels) {
+  if (!Array.isArray(channels)) {
+    return [];
+  }
+  const seen = new Set();
+  const result = [];
+  for (const item of channels) {
+    let raw = '';
+    if (typeof item === 'string') {
+      raw = item;
+    } else if (item && typeof item === 'object' && typeof item.name === 'string') {
+      raw = item.name;
+    }
+    const cleaned = raw.toLowerCase().trim();
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      result.push(cleaned);
+    }
+  }
+  return result;
+}
+
+/**
+ * Filters channels by prefix query (ignoring a leading `#`, case-insensitive).
+ */
+export function filterChannels(channels, query = '') {
+  const list = normalizeChannelList(channels);
+  if (typeof query !== 'string') {
+    return list;
+  }
+  const prefix = (query.startsWith('#') ? query.slice(1) : query).toLowerCase();
+  if (!prefix) {
+    return list;
+  }
+  return list.filter((name) => name.startsWith(prefix));
+}
+
+/**
+ * Determines the highlight color ('blue' | 'red' | null) for a single token.
+ * Apostrophe suffixes (e.g. `#genel'i`, `#genel’i`) are not part of the channel name.
+ * Pure numeric tokens (`#42`) and tokens not starting with `#` (`C#`) return `null`.
+ */
+export function getChannelTokenColor(token, knownChannels) {
+  if (typeof token !== 'string' || !token.startsWith('#')) {
+    return null;
+  }
+  const match = /^#([\p{L}\p{N}_-]+)(?:['’][\p{L}\p{N}_-]*)?$/u.exec(token);
+  if (!match) {
+    return null;
+  }
+  const channelName = match[1];
+  if (/^\d+$/.test(channelName)) {
+    return null;
+  }
+  const known = normalizeChannelList(knownChannels);
+  return known.includes(channelName.toLowerCase()) ? 'blue' : 'red';
+}
+
+/**
+ * Splits question text into contiguous segments without losing any characters:
+ * `{ text: string, color: 'blue' | 'red' | null, channel: string | null }`.
+ */
+export function tokenizeQuestionChannels(text, knownChannels) {
+  if (typeof text !== 'string' || text.length === 0) {
+    return [];
+  }
+  const knownSet = new Set(normalizeChannelList(knownChannels));
+  const segments = [];
+  const regex = /#([\p{L}\p{N}_-]+)/gu;
+  let plainStart = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    const matchIndex = match.index;
+    const fullToken = match[0];
+    const rawChannel = match[1];
+    const prevChar = matchIndex > 0 ? text[matchIndex - 1] : '';
+
+    if ((prevChar && /[\p{L}\p{N}_]/u.test(prevChar)) || /^\d+$/.test(rawChannel)) {
+      continue;
+    }
+
+    if (matchIndex > plainStart) {
+      segments.push({
+        text: text.slice(plainStart, matchIndex),
+        color: null,
+        channel: null,
+      });
+    }
+
+    const channel = rawChannel.toLowerCase();
+    const color = knownSet.has(channel) ? 'blue' : 'red';
+    segments.push({
+      text: fullToken,
+      color,
+      channel,
+    });
+
+    plainStart = matchIndex + fullToken.length;
+  }
+
+  if (plainStart < text.length) {
+    segments.push({
+      text: text.slice(plainStart),
+      color: null,
+      channel: null,
+    });
+  }
+
+  return segments;
+}
+
+/**
+ * Finds an active `#query` at the end of `text.slice(0, cursorIndex)`.
+ * `#` must be at the start of `text` or preceded by whitespace.
+ */
+export function getActiveChannelQuery(text, cursorIndex = text?.length) {
+  if (typeof text !== 'string' || text.length === 0) {
+    return null;
+  }
+  const resolvedCursor =
+    typeof cursorIndex === 'number' && !Number.isNaN(cursorIndex)
+      ? Math.min(Math.max(0, cursorIndex), text.length)
+      : text.length;
+  const prefix = text.slice(0, resolvedCursor);
+  const match = /(?:^|\s)#([\p{L}\p{N}_-]*)$/u.exec(prefix);
+  if (!match) {
+    return null;
+  }
+  const query = match[1];
+  const start = resolvedCursor - query.length - 1;
+  return {
+    query,
+    start,
+    end: resolvedCursor,
+  };
+}
+
+/**
+ * Replaces the active `#query` up to `cursorIndex` with `#${channelName} `
+ * and returns the updated text string.
+ */
+export function applyChannelSelection(text, channelName, cursorIndex = text?.length) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  if (typeof channelName !== 'string') {
+    return text;
+  }
+  const cleanedChannel = channelName.trim().replace(/^#+/, '').toLowerCase();
+  if (!cleanedChannel) {
+    return text;
+  }
+  const active = getActiveChannelQuery(text, cursorIndex);
+  if (!active) {
+    return text;
+  }
+  return `${text.slice(0, active.start)}#${cleanedChannel} ${text.slice(active.end)}`;
+}
+
+/**
+ * Returns whether the question form can be submitted.
+ * Unrecognized (red) channel names are still allowed to be submitted (K4).
+ */
+export function canSubmitQuestion(question, isSubmitting = false) {
+  if (isSubmitting) {
+    return false;
+  }
+  if (typeof question !== 'string') {
+    return false;
+  }
+  return question.trim().length > 0;
+}
+

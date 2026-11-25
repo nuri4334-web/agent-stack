@@ -188,3 +188,42 @@ export async function getAdminEvents(limit = 50) {
 
   return Array.isArray(data?.events) ? data.events : [];
 }
+
+/**
+ * Fetches the list of channels the signed-in user can ask about (GET /api/channels).
+ */
+export async function getChannels() {
+  let response;
+  try {
+    response = await fetch(`${API_URL}/api/channels`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server.');
+  }
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    if (response.ok) {
+      throw new ApiError(
+        response.status,
+        'INVALID_RESPONSE',
+        'Received an invalid response from the server.',
+      );
+    }
+  }
+
+  if (!response.ok) {
+    const defaultCode = response.status === 401 ? 'UNAUTHENTICATED' : 'SERVER_ERROR';
+    const defaultMessage =
+      response.status === 401 ? 'Please sign in.' : 'Could not load channels.';
+    const code = data?.error?.code || defaultCode;
+    const message = data?.error?.message || defaultMessage;
+    throw new ApiError(response.status, code, message);
+  }
+
+  return Array.isArray(data?.channels) ? data.channels : [];
+}
