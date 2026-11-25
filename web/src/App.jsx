@@ -3,6 +3,7 @@ import {
   API_URL,
   askQuestion,
   getAdminEvents,
+  getAdminMaskedTexts,
   getChannels,
   getCurrentUser,
   login,
@@ -10,19 +11,26 @@ import {
 } from './api';
 import {
   CHANNEL_PICKER_HINT,
+  EMPTY_MASKED_TEXTS_MESSAGE,
+  FORBIDDEN_MASKED_TEXTS_MESSAGE,
+  MASKED_TEXT_PREVIEW_LENGTH,
   SECRET_ALARM_WARNING,
   applyChannelSelection,
   canSubmitQuestion,
   filterChannels,
   formatMaskedKinds,
+  formatMaskedTextKind,
   getActiveChannelQuery,
   getDisplayedQuestion,
   getEventKey,
+  getMaskedTextKey,
   getSuspiciousWarning,
   groupEventsByRequestId,
+  isSuspiciousMaskedTextKind,
   normalizeChannelList,
   normalizeSecuritySummary,
   tokenizeQuestionChannels,
+  truncateMaskedText,
 } from './security';
 
 function formatLocalTime(isoString) {
@@ -278,6 +286,134 @@ export function SecurityEventsTable({
   );
 }
 
+function renderMaskedKindBadge(kind) {
+  const isSuspicious = isSuspiciousMaskedTextKind(kind);
+  const label = formatMaskedTextKind(kind);
+  return (
+    <span
+      className={
+        isSuspicious
+          ? 'masked-kind-badge masked-kind-suspicious'
+          : 'masked-kind-badge masked-kind-sent'
+      }
+      data-kind={kind || ''}
+      data-suspicious={isSuspicious ? 'true' : 'false'}
+      style={{
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: '999px',
+        fontSize: '12px',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+        backgroundColor: isSuspicious
+          ? 'rgba(245, 158, 11, 0.2)'
+          : 'rgba(56, 189, 248, 0.15)',
+        color: isSuspicious ? '#FDE68A' : '#7DD3FC',
+        border: `1px solid ${isSuspicious ? '#F59E0B' : '#38BDF8'}`,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+export function MaskedTextsTable({ items = [], expandedItems = {}, onToggleExpand }) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return (
+      <div className="meta-box" style={{ marginTop: '16px', color: '#94A3B8' }}>
+        {EMPTY_MASKED_TEXTS_MESSAGE}
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-container">
+      <table className="events-table">
+        <thead>
+          <tr
+            style={{
+              borderBottom: '1px solid #334155',
+              color: '#94A3B8',
+            }}
+          >
+            <th>Time</th>
+            <th>Request ID</th>
+            <th>Kind</th>
+            <th>Channel</th>
+            <th>Text</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item, idx) => {
+            const itemKey = getMaskedTextKey(item, idx);
+            const isSuspicious = isSuspiciousMaskedTextKind(item.kind);
+            const isExpanded = Boolean(
+              expandedItems?.[itemKey] ||
+                (item.request_id && expandedItems?.[item.request_id]),
+            );
+            const { displayText, isTruncated, canToggle } = truncateMaskedText(
+              item.text,
+              MASKED_TEXT_PREVIEW_LENGTH,
+              isExpanded,
+            );
+            return (
+              <tr
+                key={itemKey}
+                className={
+                  isSuspicious ? 'masked-text-row suspicious-row' : 'masked-text-row'
+                }
+                data-suspicious={isSuspicious ? 'true' : 'false'}
+                data-kind={item.kind || ''}
+                onClick={
+                  canToggle && onToggleExpand
+                    ? () => onToggleExpand(itemKey)
+                    : undefined
+                }
+                style={{
+                  borderBottom: '1px solid #1E293B',
+                  cursor: canToggle ? 'pointer' : 'default',
+                  backgroundColor: isSuspicious
+                    ? 'rgba(245, 158, 11, 0.12)'
+                    : 'transparent',
+                }}
+              >
+                <td style={{ whiteSpace: 'nowrap' }}>{formatLocalTime(item.created_at)}</td>
+                <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                  {item.request_id || '—'}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>{renderMaskedKindBadge(item.kind)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {item.channel ? `#${item.channel}` : '—'}
+                </td>
+                <td
+                  data-truncated={isTruncated ? 'true' : 'false'}
+                  data-expanded={isExpanded ? 'true' : 'false'}
+                  onClick={
+                    canToggle && onToggleExpand
+                      ? (e) => {
+                          e.stopPropagation();
+                          onToggleExpand(itemKey);
+                        }
+                      : undefined
+                  }
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'monospace',
+                    cursor: canToggle ? 'pointer' : 'default',
+                  }}
+                >
+                  {displayText}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function ChatAnswerView({ answerData }) {
   if (!answerData) return null;
 
@@ -415,12 +551,16 @@ export default function App() {
   const questionInputRef = useRef(null);
   const cursorPosRef = useRef(0);
 
-  // Security Panel state (S2-09)
+  // Security Panel state (S2-09 / S4-13)
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState('');
   const [groupByRequest, setGroupByRequest] = useState(false);
   const [expandedRequests, setExpandedRequests] = useState({});
+  const [maskedTexts, setMaskedTexts] = useState([]);
+  const [maskedTextsLoading, setMaskedTextsLoading] = useState(false);
+  const [maskedTextsError, setMaskedTextsError] = useState('');
+  const [expandedMaskedTexts, setExpandedMaskedTexts] = useState({});
 
   // Check active session on startup
   useEffect(() => {
@@ -506,6 +646,8 @@ export default function App() {
         setChannels([]);
         setChannelsLoaded(false);
         setEvents([]);
+        setMaskedTexts([]);
+        setExpandedMaskedTexts({});
         setLoginError('Please sign in.');
         setActivePage('login');
         return;
@@ -521,10 +663,43 @@ export default function App() {
     }
   }, []);
 
+  const loadAdminMaskedTexts = useCallback(async () => {
+    setMaskedTextsLoading(true);
+    setMaskedTextsError('');
+    try {
+      const list = await getAdminMaskedTexts(50);
+      setMaskedTexts(list);
+    } catch (err) {
+      if (err?.status === 401) {
+        setCurrentUser(null);
+        setChannels([]);
+        setChannelsLoaded(false);
+        setEvents([]);
+        setMaskedTexts([]);
+        setExpandedMaskedTexts({});
+        setLoginError('Please sign in.');
+        setActivePage('login');
+        return;
+      }
+      if (err?.status === 403) {
+        setMaskedTexts([]);
+        setMaskedTextsError(err?.message || FORBIDDEN_MASKED_TEXTS_MESSAGE);
+        return;
+      }
+      setMaskedTextsError(err?.message || 'Could not load masked texts.');
+    } finally {
+      setMaskedTextsLoading(false);
+    }
+  }, []);
+
+  const refreshSecurityPanel = useCallback(() => {
+    loadAdminEvents();
+    loadAdminMaskedTexts();
+  }, [loadAdminEvents, loadAdminMaskedTexts]);
 
   const openSecurityPanel = () => {
     setActivePage('panel');
-    loadAdminEvents();
+    refreshSecurityPanel();
   };
 
   const isLockedOut = lockoutSecondsLeft > 0;
@@ -551,6 +726,9 @@ export default function App() {
       setErrorInfo(null);
       setEvents([]);
       setEventsError('');
+      setMaskedTexts([]);
+      setMaskedTextsError('');
+      setExpandedMaskedTexts({});
       setLockoutSecondsLeft(0);
       setActivePage('chat');
     } catch (err) {
@@ -580,6 +758,9 @@ export default function App() {
     setErrorInfo(null);
     setEvents([]);
     setEventsError('');
+    setMaskedTexts([]);
+    setMaskedTextsError('');
+    setExpandedMaskedTexts({});
     setLoginError('');
     setActivePage('login');
   };
@@ -711,6 +892,13 @@ export default function App() {
     setExpandedRequests((prev) => ({
       ...prev,
       [reqId]: !prev[reqId],
+    }));
+  };
+
+  const toggleMaskedTextExpand = (itemKey) => {
+    setExpandedMaskedTexts((prev) => ({
+      ...prev,
+      [itemKey]: !prev[itemKey],
     }));
   };
 
@@ -899,10 +1087,10 @@ export default function App() {
                   <button
                     type="button"
                     className="btn-primary"
-                    onClick={loadAdminEvents}
-                    disabled={eventsLoading}
+                    onClick={refreshSecurityPanel}
+                    disabled={eventsLoading || maskedTextsLoading}
                   >
-                    {eventsLoading ? 'Loading…' : 'Refresh'}
+                    {eventsLoading || maskedTextsLoading ? 'Loading…' : 'Refresh'}
                   </button>
                 </div>
               )}
@@ -942,6 +1130,50 @@ export default function App() {
                 expandedRequests={expandedRequests}
                 onToggleExpand={toggleRequestExpand}
               />
+            )}
+
+            {!eventsError && (
+              <div
+                style={{
+                  marginTop: '28px',
+                  borderTop: '1px solid #334155',
+                  paddingTop: '20px',
+                }}
+              >
+                <h3>Masked texts</h3>
+                <p style={{ color: '#94A3B8', fontSize: '13px', marginTop: '4px' }}>
+                  Sanitized prompts sent to AI and messages removed as suspicious (newest first)
+                </p>
+
+                {maskedTextsError && (
+                  <div
+                    className="meta-box"
+                    role="alert"
+                    style={{
+                      marginTop: '16px',
+                      color: '#FCA5A5',
+                      borderColor: '#EF4444',
+                      backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                    }}
+                  >
+                    {maskedTextsError}
+                  </div>
+                )}
+
+                {!maskedTextsError && maskedTextsLoading && maskedTexts.length === 0 && (
+                  <div className="meta-box" style={{ marginTop: '16px', color: '#94A3B8' }}>
+                    Loading masked texts…
+                  </div>
+                )}
+
+                {!maskedTextsError && (!maskedTextsLoading || maskedTexts.length > 0) && (
+                  <MaskedTextsTable
+                    items={maskedTexts}
+                    expandedItems={expandedMaskedTexts}
+                    onToggleExpand={toggleMaskedTextExpand}
+                  />
+                )}
+              </div>
             )}
           </div>
         ) : (

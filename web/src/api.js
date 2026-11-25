@@ -190,6 +190,44 @@ export async function getAdminEvents(limit = 50) {
 }
 
 /**
+ * Fetches masked prompts and suspicious messages for the admin panel (GET /api/admin/masked-texts).
+ */
+export async function getAdminMaskedTexts(limit = 50) {
+  let response;
+  try {
+    response = await fetch(`${API_URL}/api/admin/masked-texts?limit=${limit}`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach the server.');
+  }
+
+  if (response.status === 401) {
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Please sign in.');
+  }
+
+  if (response.status === 403) {
+    throw new ApiError(403, 'FORBIDDEN', "You don't have permission.");
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(response.status, 'INVALID_RESPONSE', 'Received an invalid response from the server.');
+  }
+
+  if (!response.ok) {
+    const code = data?.error?.code || 'SERVER_ERROR';
+    const message = data?.error?.message || 'Could not load masked texts.';
+    throw new ApiError(response.status, code, message);
+  }
+
+  return Array.isArray(data?.items) ? data.items : [];
+}
+
+/**
  * Fetches the list of channels the signed-in user can ask about (GET /api/channels).
  */
 export async function getChannels() {

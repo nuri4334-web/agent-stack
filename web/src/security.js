@@ -1,4 +1,4 @@
-export const SECRET_ALARM_WARNING =
+export const SECRET_ALARM_WARNING = // UI warning text (for example when security.alarm is true)
   'A secret was found in your message and was not sent to the AI. Please rotate this key.';
 
 /**
@@ -350,4 +350,74 @@ export function canSubmitQuestion(question, isSubmitting = false) {
   }
   return question.trim().length > 0;
 }
+
+export const MASKED_TEXT_PREVIEW_LENGTH = 120;
+export const EMPTY_MASKED_TEXTS_MESSAGE = 'No masked texts yet.';
+export const FORBIDDEN_MASKED_TEXTS_MESSAGE = "You don't have permission.";
+
+/**
+ * Formats the `kind` field of a masked text entry for display in the Security Panel (K2, K3).
+ */
+export function formatMaskedTextKind(kind) {
+  if (kind === 'sent') {
+    return 'Sent to AI';
+  }
+  if (kind === 'removed_suspicious') {
+    return 'Removed as suspicious';
+  }
+  if (kind === null || kind === undefined || kind === '') {
+    return '—';
+  }
+  if (typeof kind === 'string') {
+    return kind.trim() ? kind : '—';
+  }
+  return '—';
+}
+
+/**
+ * Returns true when a masked text entry represents a message removed as suspicious (K3).
+ */
+export function isSuspiciousMaskedTextKind(kind) {
+  return kind === 'removed_suspicious';
+}
+
+/**
+ * Truncates long masked text for preview while keeping placeholders ([REDACTED], PERSON_1, etc.) untouched (K4).
+ */
+export function truncateMaskedText(
+  text,
+  maxLength = MASKED_TEXT_PREVIEW_LENGTH,
+  expanded = false,
+) {
+  if (typeof text !== 'string' || text.length === 0) {
+    return { displayText: '', isTruncated: false, canToggle: false };
+  }
+  const limit =
+    typeof maxLength === 'number' && maxLength > 0
+      ? maxLength
+      : MASKED_TEXT_PREVIEW_LENGTH;
+  if (text.length <= limit) {
+    return { displayText: text, isTruncated: false, canToggle: false };
+  }
+  if (!expanded) {
+    return {
+      displayText: `${text.slice(0, limit)}…`,
+      isTruncated: true,
+      canToggle: true,
+    };
+  }
+  return {
+    displayText: text,
+    isTruncated: false,
+    canToggle: true,
+  };
+}
+
+/**
+ * Generates a stable row key for a masked text entry.
+ */
+export function getMaskedTextKey(item, index = 0) {
+  return `${item?.created_at || ''}-${item?.request_id || 'no-req'}-${item?.kind || ''}-${item?.channel || 'no-ch'}-${index}`;
+}
+
 
