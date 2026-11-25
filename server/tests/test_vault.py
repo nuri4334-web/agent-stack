@@ -28,7 +28,7 @@ def test_same_value_same_placeholder():
 
 def test_numbers_per_kind():
     vault = Vault()
-    result = vault.mask(f"{s.EMAIL} {s.PHONE_INTL} Deniz {OTHER_EMAIL}", PEOPLE)
+    result = vault.mask(f"{s.EMAIL} {s.PHONE_INTL} Deniz Aydın {OTHER_EMAIL}", PEOPLE)
     assert result.text == "EMAIL_1 PHONE_1 PERSON_1 EMAIL_2"
     assert dict(result.counts) == {"email": 2, "phone": 1, "person": 1}
     assert result.alarm is False
@@ -36,9 +36,9 @@ def test_numbers_per_kind():
 
 def test_case_variants_are_separate_and_restore_exactly():
     vault = Vault()
-    result = vault.mask("Deniz ve deniz geldi", PEOPLE)
+    result = vault.mask("Deniz Aydın ve deniz aydın geldi", PEOPLE)
     assert result.text == "PERSON_1 ve PERSON_2 geldi"
-    assert vault.restore("PERSON_2, PERSON_1") == "deniz, Deniz"
+    assert vault.restore("PERSON_2, PERSON_1") == "deniz aydın, Deniz Aydın"
 
 
 def test_overlap_longer_wins_counted_once():
@@ -97,15 +97,15 @@ def test_restore_is_single_pass():
 
 def test_invented_placeholder_stays():
     vault = Vault()
-    vault.mask(f"Deniz {s.EMAIL}", PEOPLE)
+    vault.mask(f"Deniz Aydın {s.EMAIL}", PEOPLE)
     assert vault.restore("EMAIL_9 PERSON_99 CARD_1") == "EMAIL_9 PERSON_99 CARD_1"
 
 
 def test_redacted_never_restored():
     vault = Vault()
-    result = vault.mask("token [REDACTED], Deniz", PEOPLE)
+    result = vault.mask("token [REDACTED], Deniz Aydın", PEOPLE)
     assert result.text == "token [REDACTED], PERSON_1"
-    assert vault.restore(result.text + " [REDACTED]") == "token [REDACTED], Deniz [REDACTED]"
+    assert vault.restore(result.text + " [REDACTED]") == "token [REDACTED], Deniz Aydın [REDACTED]"
 
 
 def test_literal_placeholder_in_same_input_is_skipped():
@@ -165,7 +165,7 @@ def test_text_without_findings_is_unchanged():
 
 def test_repr_and_str_have_no_values():
     vault = Vault()
-    vault.mask(f"Deniz {s.EMAIL} {s.PHONE_INTL}", PEOPLE)
+    vault.mask(f"Deniz Aydın {s.EMAIL} {s.PHONE_INTL}", PEOPLE)
     for text in (repr(vault), str(vault)):
         leaked = s.EMAIL in text or s.PHONE_INTL in text or "Deniz" in text
         assert not leaked, "a value is in the repr"
@@ -178,6 +178,6 @@ def test_vault_does_not_log(caplog):
     with caplog.at_level(logging.DEBUG), caplog.at_level(logging.DEBUG, logger="agentstack"), \
             caplog.at_level(logging.DEBUG, logger="app"), caplog.at_level(logging.DEBUG, logger="app.filters"):
         vault = Vault()
-        masked = vault.mask(f"Deniz {s.EMAIL} EMAIL_9", PEOPLE)
+        masked = vault.mask(f"Deniz Aydın {s.EMAIL} EMAIL_9", PEOPLE)
         vault.restore(masked.text)
     assert caplog.records == []

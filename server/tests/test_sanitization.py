@@ -25,10 +25,10 @@ DEV_KINDS = {"aws_key": 2, "db_password": 1, "env_secret": 1, "github_token": 1,
 DEV_MASKED = sum(DEV_KINDS.values())
 DEV_MESSAGES = 27
 DEV_SENT = 25  # S4-02: the 2 messages with hidden instructions (D23, D24) are removed before the AI
-# S3-12: people names in #dev (25 authors of the messages sent + 12 in the texts); counted in the event, never on the screen.
-DEV_PERSONS = 37
-KEY_QUESTION_START = "#dev'i özetle, bu anahtar çalışmıyor: "
-KEY_QUESTION = KEY_QUESTION_START + s.SLACK_TOKEN
+# Complete names in #dev: 25 authors sent + 4 in the texts; counted only in the event.
+DEV_PERSONS = 29
+QUESTION_PREFIX = "#dev'i özetle, bu anahtar çalışmıyor: "
+QUESTION_WITH_SAMPLE = QUESTION_PREFIX + s.SLACK_TOKEN
 
 
 @pytest.fixture(autouse=True)
@@ -99,13 +99,13 @@ def _insert_raw_dev_message():
 
 
 def test_question_key_is_masked_sent_redacted_and_alarms(client_as, sent_to_ai):
-    r = s.ask(client_as("ali"), KEY_QUESTION)
+    r = s.ask(client_as("ali"), QUESTION_WITH_SAMPLE)
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert len(sent_to_ai) == 1
     question = s.question_part(sent_to_ai[0])
-    question_has_mask = question == KEY_QUESTION_START + s.REDACTED
+    question_has_mask = question == QUESTION_PREFIX + s.REDACTED
     question_leaked = s.SLACK_TOKEN in question
     leaked_anywhere = any(s.SLACK_TOKEN in data for data in sent_to_ai)
     in_response = s.SLACK_TOKEN in r.text
@@ -166,10 +166,10 @@ def test_other_channel_counts_personal_data_not_names(client_as, sent_to_ai):
     r = s.ask(client_as("ali"), "#genel'i özetle")
     assert r.status_code == 200
     body = r.json()
-    # #genel has no secret, two phone numbers (counted on the screen) and 7 people names (only in the event).
+    # #genel has no secret, two phone numbers (counted on the screen) and 6 complete names (only in the event).
     assert body["security"] == {"blocked": 0, "masked": 2, "suspicious": 0, "alarm": False}
     row = _row(body["request_id"], "sanitization")
-    assert (row["masked_kinds"], row["masked_count"]) == ({"person": 7, "phone": 2}, 9)
+    assert (row["masked_kinds"], row["masked_count"]) == ({"person": 6, "phone": 2}, 8)
 
 
 # --- The event rows
@@ -177,7 +177,7 @@ def test_other_channel_counts_personal_data_not_names(client_as, sent_to_ai):
 
 def test_masked_kinds_sum_equals_masked_count_on_every_row(client_as, sent_to_ai, monkeypatch):
     monkeypatch.setattr(ai, "FAKE_FIXED_ANSWER", f"Use this: {s.GITHUB_TOKEN}")
-    r = s.ask(client_as("ali"), KEY_QUESTION)
+    r = s.ask(client_as("ali"), QUESTION_WITH_SAMPLE)
     assert r.status_code == 200
     events = client_as("admin").get(s.EVENTS).json()["events"]
     rows = [e for e in events if e["request_id"] == r.json()["request_id"]]
@@ -233,7 +233,7 @@ def test_no_messages_masks_nothing_and_never_alarms(client_as, sent_to_ai):
 
 
 def test_event_list_and_database_have_no_question_value(client_as, sent_to_ai):
-    r = s.ask(client_as("ali"), KEY_QUESTION)
+    r = s.ask(client_as("ali"), QUESTION_WITH_SAMPLE)
     assert r.status_code == 200
     events_text = client_as("admin").get(s.EVENTS).text
     connection = connect(settings.DATABASE_PATH)
@@ -245,7 +245,7 @@ def test_event_list_and_database_have_no_question_value(client_as, sent_to_ai):
     assert not in_events, "slack_token is in the event list"
     assert not stored, "slack_token is stored in the database"
     question = s.question_part(sent_to_ai[0])
-    question_has_mask = question == KEY_QUESTION_START + s.REDACTED
+    question_has_mask = question == QUESTION_PREFIX + s.REDACTED
     assert question_has_mask, "the question line sent to the AI must be the question with [REDACTED]"
 
 
@@ -327,7 +327,7 @@ def test_filter_error_stops_safely(fixture_accounts, sent_to_ai, monkeypatch, ca
     monkeypatch.setattr(gateway, "mask_secrets", broken)
     c = _client_without_raise()
     with caplog.at_level(logging.DEBUG):
-        r = c.post(s.ASK, json={"question": KEY_QUESTION})
+        r = c.post(s.ASK, json={"question": QUESTION_WITH_SAMPLE})
     assert r.status_code == 500
     assert r.json() == SERVER_ERROR
     assert sent_to_ai == [] and ai.fake_call_count() == 0
@@ -347,7 +347,7 @@ def test_ask_ai_refuses_without_sanitization(fixture_accounts, sent_to_ai, monke
     monkeypatch.setattr(gateway, "STEPS", steps)
     c = _client_without_raise()
     with caplog.at_level(logging.DEBUG):
-        r = c.post(s.ASK, json={"question": KEY_QUESTION})
+        r = c.post(s.ASK, json={"question": QUESTION_WITH_SAMPLE})
     assert r.status_code == 500
     assert r.json() == SERVER_ERROR
     assert sent_to_ai == [] and ai.fake_call_count() == 0
@@ -405,7 +405,7 @@ def test_removed_message_is_not_sent_and_not_counted(client_as, sent_to_ai, monk
     row = _row(body["request_id"], "sanitization")
     # The names of the 26 messages sent count; the removed message's author does not.
     assert (row["suspicious_count"], row["masked_kinds"], row["masked_count"]) == (
-        1, {"person": DEV_PERSONS + 1}, DEV_PERSONS + 1,  # the replaced check keeps D23 and D24: 37 + 2 - 1
+        1, {"person": DEV_PERSONS + 1}, DEV_PERSONS + 1,  # the replaced check keeps D23 and D24: 29 + 2 - 1
     )
     assert _row(body["request_id"], "ask_ai")["message_count"] == DEV_MESSAGES - 1
 

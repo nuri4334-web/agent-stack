@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 
 from app.filters import api, injection, names, output, personal, secrets
-from app.filters.types import KINDS, NAME_KIND, PERSONAL_KINDS, SECRET_KINDS, FilterResult, Span
+from app.filters.types import KINDS, NAME_KIND, PERSONAL_KINDS, SECRET_KINDS as SENSITIVE_KINDS, FilterResult, Span
 
 FILTERS_DIR = Path(api.__file__).parent
-TEXT = "Deniz: deploy failed, ali@example.com"
+TEXT = "Deniz Aydın: deploy failed, ali@example.com"
 
 
 def test_kinds_are_the_shared_list():
-    assert SECRET_KINDS == (
+    assert SENSITIVE_KINDS == (
         "slack_token", "github_token", "aws_key", "google_key", "openai_key", "anthropic_key",
         "private_key", "env_secret", "db_password", "bearer_token",
     )
@@ -51,7 +51,7 @@ def test_rule_skeletons_find_nothing():
 def test_personal_and_name_rules_return_shared_spans():
     # S3-07 filled these two rules; their own tests are test_filters_personal.py and test_filters_names.py.
     assert [(s.kind, s.confidence) for s in personal.find_personal(TEXT)] == [("email", "certain")]
-    assert [(s.kind, s.start, s.end) for s in names.find_names(TEXT, ["Deniz Aydın"])] == [("person", 0, 5)]
+    assert [(s.kind, s.start, s.end) for s in names.find_names(TEXT, ["Deniz Aydın"])] == [("person", 0, 11)]
 
 
 def test_mask_secrets_skeleton_returns_the_text_unchanged():
@@ -96,8 +96,18 @@ def _imported_modules(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level + (node.module or "")
             modules.add(prefix)
-            modules.update(f"{prefix}.{alias.name}" for alias in node.names if node.level)
+            modules.update(f"{prefix}{'.' if node.module else ''}{alias.name}"
+                           for alias in node.names if node.level)
     return modules
+
+
+def test_relative_import_helper_distinguishes_siblings_from_parents(tmp_path):
+    source = tmp_path / "imports.py"
+    source.write_text("from . import injection\nfrom .. import settings\n", encoding="utf-8")
+    modules = _imported_modules(source)
+    assert ".injection" in modules
+    assert "..injection" not in modules
+    assert "..settings" in modules
 
 
 @pytest.mark.parametrize("path", sorted(FILTERS_DIR.glob("*.py")), ids=lambda p: p.name)

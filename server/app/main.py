@@ -4,7 +4,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -24,6 +24,7 @@ from . import settings, gateway
 from .data_selection.selection import person_channel_names
 from .database.masked_texts import read_masked_texts
 from .database.schema import connect, create_tables
+from .filters.detector_check import is_ready
 from .schemas import AuditEventList, ErrorResponse, AskResponse, AskRequest, LoginRequest, PersonResponse
 
 
@@ -55,7 +56,14 @@ def cors_options(origins: list[str]) -> dict[str, object]:
     }
 
 
-app = FastAPI(title="Agent Stack", version="0.1.0")
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    ready = is_ready()
+    log.info("detector ready" if ready else "detector not available")
+    yield
+
+
+app = FastAPI(title="Agent Stack", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(CORSMiddleware, **cors_options(settings.FRONTEND_ORIGINS))
 

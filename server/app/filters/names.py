@@ -1,6 +1,6 @@
 """Name rules (S3-07): the names of the Slack people.
 
-Every full name and every part of it (first name, surname) is looked up as a whole word, case-insensitively with
+Every full display name is looked up as a whole phrase, case-insensitively with
 the Turkish rules (I <-> ı, İ <-> i). The longest name wins: "Ali Kaya" is one span, never "Ali" + "Kaya".
 """
 import re
@@ -13,7 +13,7 @@ from .types import Span
 _WORD_START = r"(?<!\w)"
 _WORD_END = r"(?!\w)"
 _MIN_PART_LENGTH = 2  # a single letter ("A.") is an initial, not a name
-_WORD = re.compile(r"\w+(?:[-'’]\w+)*")
+
 
 
 def find_names(text: str, people: Sequence[str]) -> list[Span]:
@@ -45,12 +45,11 @@ def turkish_lower(text: str) -> str:
 def _pattern(people: Sequence[str]) -> re.Pattern[str] | None:
     terms: set[tuple[str, ...]] = set()
     for person in people:
-        # Words only: "Ali Kaya (PM)" -> ali, kaya, pm; a hyphen or apostrophe inside a word stays ("Ayşe-Nur").
-        words = tuple(_WORD.findall(turkish_lower(normalize(person))))
-        if len(" ".join(words)) < _MIN_PART_LENGTH:
+        # Preserve the full display name literally; only whitespace is flexible.
+        words = tuple(turkish_lower(normalize(person)).split())
+        if sum(character.isalnum() for word in words for character in word) < _MIN_PART_LENGTH:
             continue
         terms.add(words)
-        terms.update((w,) for w in words if len(w) >= _MIN_PART_LENGTH)
     if not terms:
         return None
     # Longest first, so at any position the full name is tried before its parts.

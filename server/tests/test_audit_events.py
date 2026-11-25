@@ -111,9 +111,9 @@ def test_event_time_is_the_given_time_in_utc_and_counts_stay_zero(fixture_accoun
         assert created_at == "2026-11-04T09:30:00+00:00"
         assert duration_ms >= 0
         # S3-08: the sanitization row counts the 7 secrets masked at sync in the #dev .env message of the seed;
-        # S3-12: and the 37 people names (25 authors of the messages sent + 12 in the texts; S4-02: the 2 removed
-        # messages do not count) and the 2 removed suspicious messages (suspicious_count).
-        assert counts == ([0, 0, 0, 0, 44, 2] if step == "sanitization" else [0] * 6)
+        # S3-12: 29 complete names (25 authors sent + 4 in the texts). S4-02 removes 2
+        # suspicious messages, whose names do not count; suspicious_count remains 2.
+        assert counts == ([0, 0, 0, 0, 36, 2] if step == "sanitization" else [0] * 6)
 
 
 def test_question_without_channel_name_has_no_channel(fixture_accounts, sent_to_ai):

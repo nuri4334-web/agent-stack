@@ -24,7 +24,7 @@ from tests.auth_clients import BASE_URL, LOGIN_PATH, TEST_PASSWORD
 DEV = s.DEV_CHANNEL_ID
 GENEL = "C0C8ATRM073"
 SERVER_ERROR = {"error": {"code": "SERVER_ERROR", "message": "An unexpected server error occurred."}}
-DEV_PERSONS = 37  # 25 authors of the messages sent (S4-02: 2 are removed) + 12 names in the #dev texts of the seed
+DEV_PERSONS = 29  # 25 authors sent (S4-02 removes 2 messages) + 4 complete names in the texts
 
 
 @pytest.fixture(autouse=True)
@@ -185,7 +185,7 @@ def test_ayse_genel_phones(client_as, sent_to_ai):
     assert in_sources, "phone was not restored in the sources"
     assert body["security"]["masked"] == 2
     row = _row(body["request_id"], "sanitization")
-    assert (row["masked_kinds"], row["masked_count"]) == ({"person": 7, "phone": 2}, 9)
+    assert (row["masked_kinds"], row["masked_count"]) == ({"person": 6, "phone": 2}, 8)
 
 
 def test_redacted_stays_in_answer_and_sources(client_as, sent_to_ai, monkeypatch):
